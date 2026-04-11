@@ -1,0 +1,8 @@
+# Cloud Migration Framework
+# Python 3.4 Dependencies - 2015
+
+boto3==1.1.4
+botocore==1.2.0
+PyYAML==3.11
+requests==2.7.0
+paramiko==1.15.2

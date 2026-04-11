@@ -1,0 +1,63 @@
+# Cloud Migration Framework Configuration
+# ACORIA - 2015
+
+aws:
+  region: us-east-1
+  vpc_id: vpc-xxxxxxxx
+  subnet_ids:
+    - subnet-xxxxxxxx
+    - subnet-yyyyyyyy
+
+docker:
+  registry: 123456789.dkr.ecr.us-east-1.amazonaws.com
+
+workloads:
+  - name: web-portal
+    type: stateless
+    runtime: python
+    cpu: 2
+    memory: 4
+    storage: 50
+    port: 8080
+    containerizable: true
+    entrypoint: "gunicorn app:app"
+    ports: [80, 443]
+    services:
+      - name: auth-service
+        endpoint: http://auth.internal:5000
+      - name: cache
+        endpoint: redis://cache.internal:6379
+    database:
+      engine: mysql
+      host: db.internal
+      port: 3306
+      name: portal_db
+      username: portal_user
+      storage: 100
+
+  - name: reporting-engine
+    type: legacy
+    runtime: java
+    cpu: 4
+    memory: 8
+    storage: 200
+    port: 8443
+    containerizable: false
+    ports: [8443]
+    database:
+      engine: postgres
+      host: reports-db.internal
+      port: 5432
+      name: reports
+      username: reports_user
+      storage: 500
+
+  - name: file-processor
+    type: stateless
+    runtime: python
+    cpu: 2
+    memory: 4
+    storage: 100
+    port: 9000
+    containerizable: true
+    ports: [9000]
