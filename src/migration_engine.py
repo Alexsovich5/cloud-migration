@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Cloud Migration Engine
-IT Operations Specialist - ACORIA (2015)
 
 Core migration orchestration module for assessing, planning, and executing
 workload migrations from on-premises infrastructure to AWS.

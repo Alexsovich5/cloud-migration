@@ -15,5 +15,5 @@ variable "admin_cidr" {
 
 variable "project_name" {
   description = "Project identifier"
-  default     = "acoria"
+  default     = "demo"
 }

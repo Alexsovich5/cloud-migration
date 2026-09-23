@@ -1,6 +1,5 @@
 """
 Docker Builder Module
-IT Operations Specialist - ACORIA (2015)
 
 Handles containerization of workloads for cloud migration,
 including Dockerfile generation, image building, and ECR push.

@@ -1,5 +1,4 @@
 # Cloud Migration Framework - Terraform Configuration
-# IT Operations Specialist - ACORIA (2015)
 # AWS infrastructure provisioning for migrated workloads
 
 provider "aws" {

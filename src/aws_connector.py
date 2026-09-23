@@ -1,6 +1,5 @@
 """
 AWS Connector Module
-IT Operations Specialist - ACORIA (2015)
 
 Handles all AWS API interactions for infrastructure provisioning,
 data migration, and health monitoring.

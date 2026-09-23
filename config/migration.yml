@@ -1,5 +1,4 @@
 # Cloud Migration Framework Configuration
-# ACORIA - 2015
 
 aws:
   region: us-east-1
