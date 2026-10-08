@@ -271,7 +271,7 @@ outbound peers, and merge them with dependencies declared in config.
   - `MigrationState.load(path)`, which gives an empty `{'version': 1, 'workloads': {}}` if the file is missing.
   - `workload(name)`, which creates the entry with status `pending`.
   - `transition(name, status, error=None)`, which appends `{'status', 'at'}` using `datetime.utcnow().isoformat()` and raises `StateError` on an illegal move.
-  - `record(name, kind, **ids)`, which appends to the ledger.
+  - `record(workload_name, kind, **ids)`, which appends to the ledger (the workload argument is not called `name`, because ledger entries such as security groups carry a `name` field).
   - `ledger(name)`, `clear_ledger(name)` and `set(name, key, value)`.
   - `save()`, which does `json.dump` to `path + '.tmp'`, then `os.replace`, and creates parent directories.
 - create `tests/unit/test_state.py`.

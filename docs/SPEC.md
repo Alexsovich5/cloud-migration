@@ -271,7 +271,7 @@ assessment.risk_score(workload) -> int
 discovery.parse_netstat(text) -> {"listening": [int], "established": [(ip, port)]}
 discovery.parse_ss(text) -> same shape
 discovery.SSHProbe(host, port, username, key_file=None, password=None).collect() -> same shape
-state.MigrationState.load(path); .transition(name, status); .record(name, kind, **ids); .save()
+state.MigrationState.load(path); .transition(name, status); .record(workload_name, kind, **ids); .save()
 AWSConnector(aws_cfg, catalog, session=None).provision(workload, state) -> {'security_group_id', 'instance_id', 'volume_id'}
 AWSConnector.create_database(workload, state) -> db_id
 AWSConnector.instance_state(instance_id) -> str
