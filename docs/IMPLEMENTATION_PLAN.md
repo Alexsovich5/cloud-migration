@@ -366,6 +366,7 @@ AWSConnector point boto3 clients at custom endpoints.
     - class from `sizing.recommend_db_class`
     - `MasterUserPassword` from `os.environ[db['password_env']]`, raising `ConfigError`-style `ValueError` if it is missing
     - `StorageEncrypted=True` and `MultiAZ=db.get('multi_az', False)`
+    - `Port` = `db.port`, else 3306 for mysql / 5432 for postgres. moto 0.4.14 renders an unset port as `<Port>None</Port>`, and once such an instance exists every `describe_db_instances` fails in botocore with `ValueError: invalid literal for int() with base 10: 'None'`
     - record `db_instance`
   - `instance_state(instance_id)` via `describe_instances`.
   - Delete helpers:
