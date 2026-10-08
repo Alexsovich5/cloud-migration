@@ -41,6 +41,19 @@ services:
     platform: linux/amd64
     command: ["rds", "-H", "0.0.0.0", "-p", "5002"]
 
+  tf-plan:
+    build: .
+    image: cloud-migration:app
+    platform: linux/amd64
+    network_mode: none
+    working_dir: /app/terraform
+    volumes:
+      - .:/app
+    environment:
+      - AWS_ACCESS_KEY_ID=testing
+      - AWS_SECRET_ACCESS_KEY=testing
+    entrypoint: ["sh", "/app/scripts/tf_plan_check.sh"]
+
 networks:
   default:
     ipam:

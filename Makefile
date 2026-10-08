@@ -7,19 +7,19 @@ build:
 	$(COMPOSE) build
 
 test: build
-	$(COMPOSE) up -d moto-ec2 moto-s3 moto-rds && $(COMPOSE) run --rm app make ci; status=$$?; $(COMPOSE) down -v; exit $$status
+	$(COMPOSE) up -d moto-ec2 moto-s3 moto-rds && $(COMPOSE) run --rm app make ci && $(COMPOSE) run --rm --no-deps tf-plan; status=$$?; $(COMPOSE) down -v; exit $$status
 
 test-unit:
 	py.test -v tests/unit
 
 ci:
-	flake8 src tests && py.test -v tests
+	flake8 src tests && py.test -v tests && $(MAKE) tf-check
 
 lint:
 	flake8 src tests
 
 tf-check:
-	cd terraform && terraform graph
+	cd terraform && terraform graph . > /dev/null
 
 demo:
 	@echo "demo is not available yet"

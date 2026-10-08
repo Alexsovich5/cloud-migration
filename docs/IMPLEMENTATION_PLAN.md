@@ -663,6 +663,7 @@ Why `graph` is not enough: in 0.6.3, `command/graph.go` builds the graph with `V
   - `aws_security_group.app` has `name` and no `name_prefix`
   - `aws_db_subnet_group` has a non-empty `description` and no `tags`
   - ingress rules: pyhcl 0.1.11 merges repeated blocks and keeps only the last `ingress`, so it cannot see all three. A small block scanner in the test (brace-matching over the raw `main.tf` text, inside `resource "aws_security_group" "app"`) extracts every `ingress { ... }` body and asserts exactly three: port 80 and 443 with `cidr_blocks = ["10.0.0.0/8"]`, and port 22 with `cidr_blocks = ["${var.admin_cidr}"]`
+  - both `aws_subnet.public` and `aws_subnet.private` use `split` over their CIDR variable and `var.availability_zones`: pyhcl 0.1.11 also keeps only the last resource of a repeated type (only `aws_subnet.private` survives `hcl.load`), so the same block scanner extracts each `resource "aws_subnet" "<name>"` body and parses it on its own
   - no file contains `[*]`, `cidrsubnet`, `nat_gateway` or `tags = {`
   - the outputs file defines all six outputs
   - `subprocess.check_call(['terraform', 'graph', '.'], cwd='terraform')` exits 0

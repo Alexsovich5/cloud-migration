@@ -1,75 +1,76 @@
-# Cloud Migration Framework - Terraform Configuration
-# AWS infrastructure provisioning for migrated workloads
+# Landing zone for migrated workloads: VPC, public and private subnets,
+# an internet-facing route table, an application security group, an RDS
+# subnet group and an artifacts bucket that only accepts encrypted uploads.
 
 provider "aws" {
-  region = var.aws_region
+  region = "${var.aws_region}"
 }
 
-# VPC for migrated workloads
 resource "aws_vpc" "migration" {
-  cidr_block           = var.vpc_cidr
+  cidr_block           = "${var.vpc_cidr}"
   enable_dns_support   = true
   enable_dns_hostnames = true
 
-  tags = {
+  tags {
     Name    = "migration-vpc"
     Project = "cloud-migration"
   }
 }
 
-# Public subnet
 resource "aws_subnet" "public" {
-  count             = 2
-  vpc_id            = aws_vpc.migration.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index)
-  availability_zone = "${var.aws_region}${element(["a", "b"], count.index)}"
-
+  count                   = 2
+  vpc_id                  = "${aws_vpc.migration.id}"
+  cidr_block              = "${element(split(",", var.public_subnet_cidrs), count.index)}"
+  availability_zone       = "${element(split(",", var.availability_zones), count.index)}"
   map_public_ip_on_launch = true
 
-  tags = {
+  tags {
     Name = "migration-public-${count.index}"
   }
 }
 
-# Private subnet
 resource "aws_subnet" "private" {
   count             = 2
-  vpc_id            = aws_vpc.migration.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 10)
-  availability_zone = "${var.aws_region}${element(["a", "b"], count.index)}"
+  vpc_id            = "${aws_vpc.migration.id}"
+  cidr_block        = "${element(split(",", var.private_subnet_cidrs), count.index)}"
+  availability_zone = "${element(split(",", var.availability_zones), count.index)}"
 
-  tags = {
+  tags {
     Name = "migration-private-${count.index}"
   }
 }
 
-# Internet Gateway
 resource "aws_internet_gateway" "main" {
-  vpc_id = aws_vpc.migration.id
+  vpc_id = "${aws_vpc.migration.id}"
 
-  tags = {
+  tags {
     Name = "migration-igw"
   }
 }
 
-# NAT Gateway
-resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id
+resource "aws_route_table" "public" {
+  vpc_id = "${aws_vpc.migration.id}"
 
-  tags = {
-    Name = "migration-nat"
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = "${aws_internet_gateway.main.id}"
+  }
+
+  tags {
+    Name = "migration-public"
   }
 }
 
-resource "aws_eip" "nat" {
-  vpc = true
+resource "aws_route_table_association" "public" {
+  count          = 2
+  subnet_id      = "${element(aws_subnet.public.*.id, count.index)}"
+  route_table_id = "${aws_route_table.public.id}"
 }
 
-# Security group for migrated applications
 resource "aws_security_group" "app" {
-  name_prefix = "migration-app-"
-  vpc_id      = aws_vpc.migration.id
+  name        = "migration-app"
+  description = "Inbound web and SSH for migrated applications"
+  vpc_id      = "${aws_vpc.migration.id}"
 
   ingress {
     from_port   = 80
@@ -89,7 +90,7 @@ resource "aws_security_group" "app" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.admin_cidr]
+    cidr_blocks = ["${var.admin_cidr}"]
   }
 
   egress {
@@ -99,56 +100,43 @@ resource "aws_security_group" "app" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
+  tags {
     Name = "migration-app-sg"
   }
 }
 
-# RDS subnet group
 resource "aws_db_subnet_group" "migration" {
-  name       = "migration-db-subnet"
-  subnet_ids = aws_subnet.private[*].id
-
-  tags = {
-    Name = "migration-db-subnet-group"
-  }
+  name        = "migration-db-subnet"
+  description = "Private subnets for migrated RDS instances"
+  subnet_ids  = ["${aws_subnet.private.*.id}"]
 }
 
-# S3 bucket for migration artifacts
 resource "aws_s3_bucket" "artifacts" {
   bucket = "${var.project_name}-migration-artifacts"
   acl    = "private"
 
-  versioning {
-    enabled = true
-  }
-
-  server_side_encryption_configuration {
-    rule {
-      apply_server_side_encryption_by_default {
-        sse_algorithm = "AES256"
+  policy = <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyUnencryptedUploads",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::${var.project_name}-migration-artifacts/*",
+      "Condition": {
+        "StringNotEquals": {
+          "s3:x-amz-server-side-encryption": "AES256"
+        }
       }
     }
-  }
+  ]
+}
+POLICY
 
-  tags = {
+  tags {
     Name    = "migration-artifacts"
     Project = "cloud-migration"
   }
-}
-
-output "vpc_id" {
-  value = aws_vpc.migration.id
-}
-
-output "public_subnet_ids" {
-  value = aws_subnet.public[*].id
-}
-
-output "private_subnet_ids" {
-  value = aws_subnet.private[*].id
-}
-
-output "app_security_group_id" {
-  value = aws_security_group.app.id
 }
