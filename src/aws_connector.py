@@ -36,6 +36,7 @@ class AWSConnector:
         self.rds = self._client('rds')
         self.vpc_id = aws_cfg.get('vpc_id', '')
         self.subnet_ids = aws_cfg.get('subnet_ids') or []
+        self.shared_group_id = aws_cfg.get('security_group_id') or ''
         self.allowed_cidr = aws_cfg.get('allowed_cidr', '10.0.0.0/8')
         self.default_ami = aws_cfg.get('default_ami', '')
 
@@ -110,6 +111,8 @@ class AWSConnector:
             'MaxCount': 1,
             'SecurityGroupIds': [sg_id],
         }
+        if self.shared_group_id:
+            kwargs['SecurityGroupIds'].append(self.shared_group_id)
         if self.subnet_ids:
             kwargs['SubnetId'] = self.subnet_ids[0]
         instance_id = self.ec2.run_instances(**kwargs)['Instances'][0]['InstanceId']

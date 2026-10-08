@@ -6,6 +6,7 @@ aws:
   region: us-east-1
   vpc_id: ""                 # filled from Terraform output vpc_id with --tfstate
   subnet_ids: []             # filled from Terraform output private_subnet_ids
+  security_group_id: ""      # filled from Terraform output app_security_group_id
   artifacts_bucket: ""       # empty uses the default bucket name
   allowed_cidr: 10.0.0.0/8
   default_ami: ami-1a2b3c4d

@@ -16,6 +16,7 @@ import config
 import rollback
 import sizing
 import state as state_mod
+import tfstate
 from aws_connector import AWSConnector
 from data_migration import DataMigrator, artifacts_bucket
 from docker_builder import DockerBuilder
@@ -47,6 +48,9 @@ class MigrationEngine:
         self.config = self._load_config(config_path)
         self.state_path = state_path
         self.tfstate_path = tfstate_path
+        if tfstate_path:
+            tfstate.merge_outputs(self.config, tfstate.read_outputs(tfstate_path))
+            logger.info("Terraform outputs loaded from %s", tfstate_path)
         self.catalog = sizing.Catalog.from_file(self.config['pricing_file'])
         aws_cfg = self.config.get('aws', {})
         self.aws = aws if aws is not None else AWSConnector(aws_cfg, self.catalog,
@@ -179,6 +183,8 @@ def build_parser():
                         help='Path to migration config')
     parser.add_argument('--state', default=DEFAULT_STATE_PATH,
                         help='Path to the migration state file')
+    parser.add_argument('--tfstate', metavar='PATH',
+                        help='Fill empty network settings from Terraform state outputs')
     parser.add_argument('--output', default='assessment_results.json',
                         help='Where --assess writes its results')
     parser.add_argument('--workload', metavar='NAME',
@@ -201,8 +207,8 @@ def main(argv=None):
         parser.error('--workload is only valid with --migrate')
 
     try:
-        engine = MigrationEngine(args.config, args.state)
-    except config.ConfigError as e:
+        engine = MigrationEngine(args.config, args.state, tfstate_path=args.tfstate)
+    except (config.ConfigError, ValueError, IOError) as e:
         sys.stderr.write('error: {0}\n'.format(e))
         return 2
 

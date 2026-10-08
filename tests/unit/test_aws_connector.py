@@ -126,6 +126,15 @@ def test_ingress_per_port_on_allowed_cidr(st):
         for port in (80, 443)]
 
 
+def test_run_instances_adds_shared_security_group(st):
+    ec2 = fake_ec2()
+    make_connector({'security_group_id': 'sg-shared'}, ec2=ec2).provision(WORKLOAD, st)
+
+    assert ec2.run_instances.call_args[1]['SecurityGroupIds'] == ['sg-9', 'sg-shared']
+    ids = [r['id'] for r in st.ledger('portal') if r['kind'] == 'security_group']
+    assert ids == ['sg-9']
+
+
 def test_run_instances_uses_sizing_ami_and_tags(st):
     ec2 = fake_ec2()
     make_connector(ec2=ec2).provision(WORKLOAD, st)
