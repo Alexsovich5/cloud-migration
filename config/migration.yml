@@ -1,14 +1,17 @@
 # Cloud Migration Framework Configuration
 
+pricing_file: config/pricing.yml
+
 aws:
   region: us-east-1
-  vpc_id: vpc-xxxxxxxx
-  subnet_ids:
-    - subnet-xxxxxxxx
-    - subnet-yyyyyyyy
+  vpc_id: ""                 # filled from Terraform output vpc_id with --tfstate
+  subnet_ids: []             # filled from Terraform output private_subnet_ids
+  artifacts_bucket: ""       # empty uses the default bucket name
+  allowed_cidr: 10.0.0.0/8
+  default_ami: ami-1a2b3c4d
 
 docker:
-  registry: 123456789.dkr.ecr.us-east-1.amazonaws.com
+  registry: registry.local:5000
 
 workloads:
   - name: web-portal
@@ -21,18 +24,28 @@ workloads:
     containerizable: true
     entrypoint: "gunicorn app:app"
     ports: [80, 443]
+    data_path: data/web-portal
+    utilization:
+      peak_cpu_pct: 40
+      peak_mem_pct: 55
     services:
       - name: auth-service
-        endpoint: http://auth.internal:5000
+        endpoint: auth.internal:5000
       - name: cache
-        endpoint: redis://cache.internal:6379
+        endpoint: cache.internal:6379
     database:
       engine: mysql
       host: db.internal
       port: 3306
       name: portal_db
       username: portal_user
+      password_env: PORTAL_DB_PASSWORD
       storage: 100
+    # Post-migration TCP check against the new instance:
+    # validation:
+    #   host: 10.0.1.20
+    #   port: 8080
+    #   timeout: 5
 
   - name: reporting-engine
     type: legacy
@@ -49,6 +62,7 @@ workloads:
       port: 5432
       name: reports
       username: reports_user
+      password_env: REPORTS_DB_PASSWORD
       storage: 500
 
   - name: file-processor

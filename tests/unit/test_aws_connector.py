@@ -331,3 +331,25 @@ def test_old_stubs_are_gone():
     for name in ('check_instance_health', 'check_connectivity', 'check_data_integrity',
                  'destroy_infrastructure', 'provision_infrastructure'):
         assert not hasattr(aws_connector.AWSConnector, name)
+
+
+def test_create_database_from_fixture_config(st, monkeypatch):
+    import config
+    fixture = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           'fixtures', 'config', 'with_database.yml')
+    workload = config.load(fixture)['workloads'][0]
+    monkeypatch.setenv('ORDERS_DB_PASSWORD', 'orders-secret')
+    rds = mock.MagicMock()
+    rds.create_db_instance.return_value = {
+        'DBInstance': {'DBInstanceIdentifier': 'migrated-orders-db'}}
+
+    db_id = make_connector(rds=rds).create_database(workload, st)
+
+    kwargs = rds.create_db_instance.call_args[1]
+    assert kwargs['DBInstanceIdentifier'] == 'migrated-orders-db'
+    assert kwargs['Engine'] == 'postgres'
+    assert kwargs['Port'] == 5432
+    assert kwargs['MasterUserPassword'] == 'orders-secret'
+    assert kwargs['StorageEncrypted'] is True
+    assert db_id == 'migrated-orders-db'
+    assert st.ledger('orders-api') == [{'kind': 'db_instance', 'id': 'migrated-orders-db'}]

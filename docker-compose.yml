@@ -16,6 +16,8 @@ services:
       - MOTO_EC2=http://moto-ec2:5000
       - MOTO_S3=http://moto-s3:5001
       - MOTO_RDS=http://moto-rds:5002
+      - PORTAL_DB_PASSWORD=demo
+      - REPORTS_DB_PASSWORD=demo
     depends_on:
       - moto-ec2
       - moto-s3

@@ -109,3 +109,26 @@ def test_invalid_port_in_file_raises(tmpdir):
 
 def test_valid_config_passes_validation(valid_cfg):
     assert config.validate(valid_cfg) is None
+
+
+def test_database_fixture_keeps_password_env():
+    cfg = config.load(fixture('with_database.yml'))
+    db = cfg['workloads'][0]['database']
+    assert db['engine'] == 'postgres'
+    assert db['password_env'] == 'ORDERS_DB_PASSWORD'
+
+
+def test_sample_config_uses_private_registry_and_password_envs():
+    cfg = config.load(os.path.join(REPO_ROOT, 'config', 'migration.yml'))
+    assert cfg['docker']['registry'] == 'registry.local:5000'
+    assert cfg['aws']['vpc_id'] == ''
+    assert cfg['aws']['subnet_ids'] == []
+    workloads = dict((w['name'], w) for w in cfg['workloads'])
+    assert workloads['web-portal']['database']['password_env'] == 'PORTAL_DB_PASSWORD'
+    assert workloads['reporting-engine']['database']['password_env'] == 'REPORTS_DB_PASSWORD'
+    assert workloads['web-portal']['data_path'] == 'data/web-portal'
+    for w in cfg['workloads']:
+        for service in w.get('services', []):
+            assert '://' not in service['endpoint']
+        if w['runtime'] != 'python':
+            assert 'entrypoint' not in w

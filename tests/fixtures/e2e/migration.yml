@@ -1,0 +1,58 @@
+# End-to-end run against the moto simulators started by docker-compose.
+# tests/integration/test_end_to_end.py fills in absolute paths, a unique
+# database name and the port it listens on before running the CLI.
+pricing_file: config/pricing.yml
+
+aws:
+  region: us-east-1
+  vpc_id: ""
+  subnet_ids: []
+  artifacts_bucket: e2e-artifacts
+  allowed_cidr: 10.0.0.0/8
+  default_ami: ami-1a2b3c4d
+  endpoints:
+    ec2: http://moto-ec2:5000
+    s3: http://moto-s3:5001
+    rds: http://moto-rds:5002
+
+docker:
+  registry: registry.local:5000
+  command: tests/support/fake_docker.py
+
+workloads:
+  - name: web-portal
+    type: stateless
+    runtime: python
+    cpu: 2
+    memory: 4
+    storage: 20
+    ports: [80, 443]
+    containerizable: true
+    version: "1.0"
+    entrypoint: "gunicorn app:app"
+    data_path: tests/fixtures/data/web-portal
+    database:
+      engine: mysql
+      host: db.internal
+      port: 3306
+      name: portal_db
+      username: portal_user
+      password_env: PORTAL_DB_PASSWORD
+      storage: 20
+    validation:
+      host: 127.0.0.1
+      port: 8080
+      timeout: 2
+
+  - name: broken-app
+    type: legacy
+    runtime: java
+    cpu: 1
+    memory: 1
+    storage: 0
+    ports: [8443]
+    containerizable: false
+    validation:
+      host: 127.0.0.1
+      port: 1
+      timeout: 2

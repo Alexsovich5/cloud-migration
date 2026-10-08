@@ -162,27 +162,76 @@ class MigrationEngine:
         return rollback.run(name, st, self.aws, self.aws.s3)
 
 
-def main():
+def _workload_names(engine):
+    return [w['name'] for w in engine.config.get('workloads', [])]
+
+
+def _unknown_workload(engine, name):
+    if name in _workload_names(engine):
+        return False
+    sys.stderr.write('error: workload {0} is not in config\n'.format(name))
+    return True
+
+
+def build_parser():
     parser = argparse.ArgumentParser(description='Cloud Migration Framework')
     parser.add_argument('--config', default='config/migration.yml',
                         help='Path to migration config')
-    parser.add_argument('--assess', action='store_true',
+    parser.add_argument('--state', default=DEFAULT_STATE_PATH,
+                        help='Path to the migration state file')
+    parser.add_argument('--output', default='assessment_results.json',
+                        help='Where --assess writes its results')
+    parser.add_argument('--workload', metavar='NAME',
+                        help='With --migrate, migrate only this workload')
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument('--assess', action='store_true',
                         help='Run workload assessment')
-    parser.add_argument('--migrate', action='store_true',
+    action.add_argument('--migrate', action='store_true',
                         help='Execute migration plan')
-    args = parser.parse_args()
+    action.add_argument('--rollback', metavar='NAME',
+                        help='Delete the resources recorded for one workload')
+    return parser
 
-    engine = MigrationEngine(args.config)
+
+def main(argv=None):
+    """Run the CLI; return 0 on success, 1 if a workload failed, 2 on bad config."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.workload and not args.migrate:
+        parser.error('--workload is only valid with --migrate')
+
+    try:
+        engine = MigrationEngine(args.config, args.state)
+    except config.ConfigError as e:
+        sys.stderr.write('error: {0}\n'.format(e))
+        return 2
 
     if args.assess:
-        results = engine.assess_workloads()
+        results = engine.assess_workloads(args.output)
         ready = sum(1 for r in results if r['ready'])
         print("\nAssessment complete: {0}/{1} workloads ready".format(ready, len(results)))
-    elif args.migrate:
-        engine.execute_migration()
-    else:
-        parser.print_help()
+        return 0
+
+    if args.migrate:
+        if args.workload and _unknown_workload(engine, args.workload):
+            return 2
+        ok = engine.execute_migration(only=args.workload)
+        names = [args.workload] if args.workload else _workload_names(engine)
+        st = engine._load_state()
+        failed = [n for n in names
+                  if st.status(n) in (state_mod.FAILED, state_mod.ROLLED_BACK)]
+        return 0 if ok and not failed else 1
+
+    if _unknown_workload(engine, args.rollback):
+        return 2
+    try:
+        deleted = engine.rollback_workload(args.rollback)
+    except (rollback.RollbackError, state_mod.StateError) as e:
+        sys.stderr.write('error: {0}\n'.format(e))
+        return 1
+    print('Rolled back {0}: {1} resources deleted'.format(args.rollback, len(deleted)))
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

@@ -1,0 +1,20 @@
+aws:
+  default_ami: ami-1a2b3c4d
+docker:
+  registry: registry.local:5000
+workloads:
+  - name: orders-api
+    type: stateful
+    runtime: python
+    cpu: 2
+    memory: 4
+    storage: 20
+    ports: [8080]
+    database:
+      engine: postgres
+      host: orders-db.internal
+      port: 5432
+      name: orders_db
+      username: orders_user
+      password_env: ORDERS_DB_PASSWORD
+      storage: 50
