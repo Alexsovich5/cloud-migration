@@ -9,7 +9,7 @@ CATALOG = sizing.Catalog({
 
 
 def make_connector(ec2):
-    with mock.patch('boto3.client', return_value=ec2):
+    with mock.patch('boto3.session.Session'):
         connector = aws_connector.AWSConnector({'subnet_ids': ['subnet-1']}, CATALOG)
     connector.ec2 = ec2
     return connector

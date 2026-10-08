@@ -13,6 +13,31 @@ services:
       - AWS_ACCESS_KEY_ID=testing
       - AWS_SECRET_ACCESS_KEY=testing
       - AWS_DEFAULT_REGION=us-east-1
+      - MOTO_EC2=http://moto-ec2:5000
+      - MOTO_S3=http://moto-s3:5001
+      - MOTO_RDS=http://moto-rds:5002
+    depends_on:
+      - moto-ec2
+      - moto-s3
+      - moto-rds
+
+  moto-ec2:
+    build: docker/moto
+    image: cloud-migration:moto
+    platform: linux/amd64
+    command: ["ec2", "-H", "0.0.0.0", "-p", "5000"]
+
+  moto-s3:
+    build: docker/moto
+    image: cloud-migration:moto
+    platform: linux/amd64
+    command: ["s3bucket_path", "-H", "0.0.0.0", "-p", "5001"]
+
+  moto-rds:
+    build: docker/moto
+    image: cloud-migration:moto
+    platform: linux/amd64
+    command: ["rds", "-H", "0.0.0.0", "-p", "5002"]
 
 networks:
   default:

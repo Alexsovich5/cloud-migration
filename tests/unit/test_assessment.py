@@ -125,7 +125,7 @@ def test_engine_writes_assessment_to_given_path(tmpdir, monkeypatch):
     from unittest import mock
     import migration_engine
     monkeypatch.chdir(REPO_ROOT)
-    with mock.patch('boto3.client'):
+    with mock.patch('boto3.session.Session'):
         engine = migration_engine.MigrationEngine(SAMPLE_CONFIG)
     path = str(tmpdir.join('results.json'))
     results = engine.assess_workloads(path)

@@ -306,6 +306,7 @@ so rollback and reporting can work from a single JSON file.
 - create `docker/moto/Dockerfile`:
   - `FROM python:3.4`
   - `pip install --no-deps -r requirements.txt`
+  - `ENV PYTHONHASHSEED=0`: moto builds its Flask url map from a dict, and under some hash seeds `PUT /<bucket>` is routed to the trailing-slash rule and fails with HTTP 500 (`FormDataRoutingRedirect`). Seed 0 gives the working rule order.
   - download `https://github.com/getmoto/moto/archive/967c778390a8d5991a475fa92856e627d3116b1b.tar.gz` (the commit the 0.4.14 tag points at, so a moved tag cannot change the build), check it with `sha256sum -c` against `ddf4f4c72dc614c29475f811bdb25e30b2039baa56a628af63bc0284ad433445` (computed from that tarball; GitHub archive bytes are not formally guaranteed stable, so if the check ever fails, re-verify the commit and update the hash rather than dropping the check), then `pip install --no-deps` the tarball
   - `ENTRYPOINT ["moto_server"]`
 - modify `docker-compose.yml`: add these services, all built from `docker/moto`:
@@ -324,7 +325,7 @@ so rollback and reporting can work from a single JSON file.
   - `wait_for_port(host, port, timeout=30)`
   - `sim_config()`, which builds an `aws` config dict from the env vars
   - `client(svc)`, which builds boto3 clients for the tests, using the same `Config(signature_version='s3v4')` for S3
-- create `tests/integration/conftest.py`, which skips integration tests with a clear message when `MOTO_EC2` is unset (so `make test-unit` still works outside compose).
+- create `tests/integration/conftest.py` with a session `simulators` fixture that skips, with a clear message, when `MOTO_EC2` is unset (so `make test-unit` still works outside compose) and otherwise waits for the three ports. Simulator tests opt in with `pytest.mark.usefixtures('simulators')`; the T6 SSH integration tests need no simulators and keep running.
 - create `tests/integration/test_simulators.py`.
 
 **Tests to write first:**

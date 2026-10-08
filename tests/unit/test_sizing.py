@@ -93,7 +93,7 @@ def test_cost_without_database(catalog):
 
 def test_aws_connector_delegates_instance_type(catalog):
     import aws_connector
-    with mock.patch('boto3.client'):
+    with mock.patch('boto3.session.Session'):
         connector = aws_connector.AWSConnector({}, catalog)
     workload = {'name': 'w', 'cpu': 2, 'memory': 4,
                 'utilization': {'peak_cpu_pct': 10, 'peak_mem_pct': 10}}
@@ -109,7 +109,7 @@ def test_engine_delegates_to_sizing(tmpdir):
                  '  - {{name: tiny, cpu: 1, memory: 1}}\n'
                  '  - {{name: web-portal, cpu: 2, memory: 4, storage: 50,\n'
                  '     database: {{engine: mysql, storage: 100}}}}\n'.format(PRICING_FILE))
-    with mock.patch('boto3.client'):
+    with mock.patch('boto3.session.Session'):
         engine = migration_engine.MigrationEngine(str(config))
     tiny, portal = engine.assess_workloads(str(tmpdir.join('out.json')))
     assert tiny['resource_profile']['recommended_instance'] == 't2.micro'

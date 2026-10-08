@@ -27,7 +27,7 @@ def test_module_imports(module_name):
 def test_aws_connector_creates_only_needed_clients():
     import aws_connector
     import sizing
-    with mock.patch('boto3.client') as fake_client:
-        aws_connector.AWSConnector({'region': 'us-west-2'}, sizing.Catalog({}))
-    services = sorted(call[0][0] for call in fake_client.call_args_list)
+    session = mock.MagicMock()
+    aws_connector.AWSConnector({'region': 'us-west-2'}, sizing.Catalog({}), session=session)
+    services = sorted(call[0][0] for call in session.client.call_args_list)
     assert services == ['ec2', 'rds', 's3']

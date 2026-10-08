@@ -7,7 +7,7 @@ build:
 	$(COMPOSE) build
 
 test: build
-	$(COMPOSE) run --rm app make ci; status=$$?; $(COMPOSE) down -v; exit $$status
+	$(COMPOSE) up -d moto-ec2 moto-s3 moto-rds && $(COMPOSE) run --rm app make ci; status=$$?; $(COMPOSE) down -v; exit $$status
 
 test-unit:
 	py.test -v tests/unit

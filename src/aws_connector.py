@@ -6,7 +6,9 @@ data migration, and health monitoring.
 """
 
 import logging
+
 import boto3
+from botocore.client import Config
 from botocore.exceptions import ClientError
 
 import sizing
@@ -17,14 +19,27 @@ logger = logging.getLogger('aws_connector')
 class AWSConnector:
     """Interface for AWS service operations during migration."""
 
-    def __init__(self, config, catalog):
+    def __init__(self, aws_cfg, catalog, session=None):
         self.catalog = catalog
-        self.region = config.get('region', 'us-east-1')
-        self.ec2 = boto3.client('ec2', region_name=self.region)
-        self.s3 = boto3.client('s3', region_name=self.region)
-        self.rds = boto3.client('rds', region_name=self.region)
-        self.vpc_id = config.get('vpc_id', '')
-        self.subnet_ids = config.get('subnet_ids', [])
+        self.region = aws_cfg.get('region', 'us-east-1')
+        self.endpoints = dict(aws_cfg.get('endpoints') or {})
+        self.session = session if session is not None else boto3.session.Session()
+        self.ec2 = self._client('ec2')
+        # Signature v4 stops botocore from rewriting DNS-compatible bucket
+        # requests to <bucket>.s3.amazonaws.com, which would bypass endpoint_url.
+        self._s3 = self._client('s3', config=Config(signature_version='s3v4'))
+        self.rds = self._client('rds')
+        self.vpc_id = aws_cfg.get('vpc_id', '')
+        self.subnet_ids = aws_cfg.get('subnet_ids', [])
+
+    def _client(self, svc, **kwargs):
+        return self.session.client(svc, region_name=self.region,
+                                   endpoint_url=self.endpoints.get(svc), **kwargs)
+
+    @property
+    def s3(self):
+        """S3 client (signature v4, honours the configured endpoint)."""
+        return self._s3
 
     def provision_infrastructure(self, workload):
         """Provision AWS infrastructure for a workload."""
