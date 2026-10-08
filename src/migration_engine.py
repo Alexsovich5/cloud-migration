@@ -6,13 +6,12 @@ Core migration orchestration module for assessing, planning, and executing
 workload migrations from on-premises infrastructure to AWS.
 """
 
-import sys
-import json
-import yaml
 import logging
 import argparse
 from datetime import datetime
 
+import assessment
+import config
 import sizing
 from aws_connector import AWSConnector
 from docker_builder import DockerBuilder
@@ -30,134 +29,23 @@ class MigrationEngine:
     def __init__(self, config_path='config/migration.yml'):
         self.config = self._load_config(config_path)
         self.catalog = sizing.Catalog.from_file(
-            self.config.get('pricing_file', 'config/pricing.yml'))
+            self.config['pricing_file'])
         self.aws = AWSConnector(self.config.get('aws', {}), self.catalog)
         self.docker = DockerBuilder(self.config.get('docker', {}))
         self.migration_log = []
 
     def _load_config(self, path):
-        """Load migration configuration from YAML file."""
-        try:
-            with open(path, 'r') as f:
-                config = yaml.safe_load(f)
-            logger.info("Configuration loaded from %s", path)
-            return config
-        except FileNotFoundError:
-            logger.error("Configuration file not found: %s", path)
-            sys.exit(1)
+        """Load and validate migration configuration (raises ConfigError)."""
+        cfg = config.load(path)
+        logger.info("Configuration loaded from %s", path)
+        return cfg
 
-    def assess_workloads(self):
-        """Assess on-premises workloads for migration readiness."""
+    def assess_workloads(self, output_path='assessment_results.json'):
+        """Assess workloads for migration readiness and write the results."""
         logger.info("Starting workload assessment...")
-        workloads = self.config.get('workloads', [])
-        assessment_results = []
-
-        for workload in workloads:
-            result = {
-                'name': workload['name'],
-                'type': workload.get('type', 'unknown'),
-                'timestamp': datetime.utcnow().isoformat(),
-                'dependencies': self._discover_dependencies(workload),
-                'resource_profile': self._profile_resources(workload),
-                'migration_strategy': self._recommend_strategy(workload),
-                'estimated_cost': self._estimate_cost(workload),
-                'risk_score': self._calculate_risk(workload),
-                'ready': True
-            }
-
-            # Check for blockers
-            blockers = self._check_blockers(workload)
-            if blockers:
-                result['ready'] = False
-                result['blockers'] = blockers
-
-            assessment_results.append(result)
-            logger.info("Assessed workload: %s (ready=%s)",
-                        workload['name'], result['ready'])
-
-        self._save_assessment(assessment_results)
-        return assessment_results
-
-    def _discover_dependencies(self, workload):
-        """Map workload dependencies including network, storage, and services."""
-        deps = []
-        if 'database' in workload:
-            deps.append({
-                'type': 'database',
-                'engine': workload['database'].get('engine', 'unknown'),
-                'host': workload['database'].get('host', ''),
-                'port': workload['database'].get('port', 0)
-            })
-        if 'services' in workload:
-            for svc in workload['services']:
-                deps.append({
-                    'type': 'service',
-                    'name': svc.get('name', ''),
-                    'endpoint': svc.get('endpoint', '')
-                })
-        return deps
-
-    def _profile_resources(self, workload):
-        """Profile resource utilization for right-sizing."""
-        return {
-            'cpu_cores': workload.get('cpu', 2),
-            'memory_gb': workload.get('memory', 4),
-            'storage_gb': workload.get('storage', 50),
-            'iops': workload.get('iops', 1000),
-            'network_mbps': workload.get('network', 100),
-            'recommended_instance': self._recommend_instance_type(workload)
-        }
-
-    def _recommend_instance_type(self, workload):
-        """Recommend AWS instance type based on resource profile."""
-        return sizing.recommend_instance(workload, self.catalog)
-
-    def _recommend_strategy(self, workload):
-        """Determine migration strategy (6 Rs)."""
-        wtype = workload.get('type', '')
-        containerizable = workload.get('containerizable', False)
-
-        if containerizable:
-            return 'replatform'
-        elif wtype == 'legacy':
-            return 'rehost'
-        elif wtype == 'stateless':
-            return 'refactor'
-        else:
-            return 'rehost'
-
-    def _estimate_cost(self, workload):
-        """Estimate monthly AWS cost for the workload."""
-        return sizing.estimate_cost(workload, self.catalog)
-
-    def _calculate_risk(self, workload):
-        """Calculate migration risk score (0-100)."""
-        risk = 20  # baseline
-        if workload.get('type') == 'legacy':
-            risk += 30
-        if len(workload.get('services', [])) > 3:
-            risk += 20
-        if workload.get('storage', 0) > 500:
-            risk += 15
-        if not workload.get('containerizable', False):
-            risk += 15
-        return min(risk, 100)
-
-    def _check_blockers(self, workload):
-        """Identify migration blockers."""
-        blockers = []
-        if workload.get('licensed_software'):
-            blockers.append("Licensed software requires vendor approval")
-        if workload.get('compliance_requirements'):
-            blockers.append("Compliance review required before migration")
-        return blockers
-
-    def _save_assessment(self, results):
-        """Save assessment results to JSON file."""
-        output_path = 'assessment_results.json'
-        with open(output_path, 'w') as f:
-            json.dump(results, f, indent=2)
-        logger.info("Assessment saved to %s", output_path)
+        results = assessment.assess(self.config['workloads'], self.catalog)
+        assessment.write_results(results, output_path)
+        return results
 
     def execute_migration(self):
         """Execute the migration plan."""
@@ -175,7 +63,7 @@ class MigrationEngine:
     def _migrate_workload(self, workload):
         """Migrate a single workload to AWS."""
         name = workload['name']
-        strategy = self._recommend_strategy(workload)
+        strategy = assessment.recommend_strategy(workload)
         logger.info("Migrating %s using %s strategy", name, strategy)
 
         # Provision infrastructure

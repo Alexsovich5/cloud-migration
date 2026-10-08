@@ -1,0 +1,11 @@
+workloads:
+  - name: web-portal
+    type: stateless
+    runtime: python
+    cpu: 2
+    memory: 4
+  - name: web-portal
+    type: legacy
+    runtime: java
+    cpu: 4
+    memory: 8

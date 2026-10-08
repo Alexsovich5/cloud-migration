@@ -1,0 +1,25 @@
+aws:
+  default_ami: ami-1a2b3c4d
+docker:
+  registry: registry.local:5000
+workloads:
+  - name: web-portal
+    type: stateless
+    runtime: python
+    cpu: 2
+    memory: 4
+    ports: [80, 443]
+    containerizable: true
+    utilization: {peak_cpu_pct: 40, peak_mem_pct: 55}
+    services:
+      - name: auth-service
+        endpoint: auth.internal:5000
+    database:
+      engine: mysql
+      host: db.internal
+      port: 3306
+  - name: reporting-engine
+    type: legacy
+    runtime: java
+    cpu: 4
+    memory: 7.5

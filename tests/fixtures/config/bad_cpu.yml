@@ -1,0 +1,6 @@
+workloads:
+  - name: web-portal
+    type: stateless
+    runtime: python
+    cpu: two
+    memory: 4
