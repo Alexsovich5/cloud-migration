@@ -13,6 +13,7 @@ import logging
 import argparse
 from datetime import datetime
 
+import sizing
 from aws_connector import AWSConnector
 from docker_builder import DockerBuilder
 
@@ -28,7 +29,9 @@ class MigrationEngine:
 
     def __init__(self, config_path='config/migration.yml'):
         self.config = self._load_config(config_path)
-        self.aws = AWSConnector(self.config.get('aws', {}))
+        self.catalog = sizing.Catalog.from_file(
+            self.config.get('pricing_file', 'config/pricing.yml'))
+        self.aws = AWSConnector(self.config.get('aws', {}), self.catalog)
         self.docker = DockerBuilder(self.config.get('docker', {}))
         self.migration_log = []
 
@@ -107,19 +110,7 @@ class MigrationEngine:
 
     def _recommend_instance_type(self, workload):
         """Recommend AWS instance type based on resource profile."""
-        cpu = workload.get('cpu', 2)
-        memory = workload.get('memory', 4)
-
-        if cpu <= 1 and memory <= 2:
-            return 't2.small'
-        elif cpu <= 2 and memory <= 4:
-            return 't2.medium'
-        elif cpu <= 4 and memory <= 8:
-            return 'm4.large'
-        elif cpu <= 8 and memory <= 16:
-            return 'm4.xlarge'
-        else:
-            return 'm4.2xlarge'
+        return sizing.recommend_instance(workload, self.catalog)
 
     def _recommend_strategy(self, workload):
         """Determine migration strategy (6 Rs)."""
@@ -137,17 +128,7 @@ class MigrationEngine:
 
     def _estimate_cost(self, workload):
         """Estimate monthly AWS cost for the workload."""
-        instance_costs = {
-            't2.small': 16.79,
-            't2.medium': 33.58,
-            'm4.large': 73.00,
-            'm4.xlarge': 146.00,
-            'm4.2xlarge': 292.00
-        }
-        instance = self._recommend_instance_type(workload)
-        base_cost = instance_costs.get(instance, 100.00)
-        storage_cost = workload.get('storage', 50) * 0.10
-        return round(base_cost + storage_cost, 2)
+        return sizing.estimate_cost(workload, self.catalog)
 
     def _calculate_risk(self, workload):
         """Calculate migration risk score (0-100)."""

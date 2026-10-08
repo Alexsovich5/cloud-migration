@@ -1,11 +1,16 @@
 from unittest import mock
 
 import aws_connector
+import sizing
+
+CATALOG = sizing.Catalog({
+    'instances': {'t2.micro': {'vcpu': 1, 'memory_gib': 1, 'hourly_usd': 0.013}},
+})
 
 
 def make_connector(ec2):
     with mock.patch('boto3.client', return_value=ec2):
-        connector = aws_connector.AWSConnector({'subnet_ids': ['subnet-1']})
+        connector = aws_connector.AWSConnector({'subnet_ids': ['subnet-1']}, CATALOG)
     connector.ec2 = ec2
     return connector
 
@@ -38,7 +43,8 @@ def test_provision_infrastructure_returns_all_resource_ids():
     ec2.create_volume.return_value = {'VolumeId': 'vol-9'}
     connector = make_connector(ec2)
 
-    result = connector.provision_infrastructure({'name': 'portal', 'storage': 20, 'ports': [80]})
+    workload = {'name': 'portal', 'cpu': 1, 'memory': 1, 'storage': 20, 'ports': [80]}
+    result = connector.provision_infrastructure(workload)
 
     assert result == {'instance_id': 'i-9', 'volume_id': 'vol-9', 'security_group_id': 'sg-9'}
 
@@ -49,7 +55,8 @@ def test_provision_infrastructure_without_storage_has_no_volume():
     ec2.run_instances.return_value = {'Instances': [{'InstanceId': 'i-9'}]}
     connector = make_connector(ec2)
 
-    result = connector.provision_infrastructure({'name': 'portal', 'ports': []})
+    workload = {'name': 'portal', 'cpu': 1, 'memory': 1, 'ports': []}
+    result = connector.provision_infrastructure(workload)
 
     assert result['volume_id'] is None
     assert not ec2.create_volume.called

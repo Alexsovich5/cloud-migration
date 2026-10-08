@@ -1,0 +1,22 @@
+# static hand-maintained snapshot of us-east-1 Linux on-demand prices; edit to match current pricing
+hours_per_month: 730
+
+instances:            # name: {vcpu, memory_gib, hourly_usd}
+  t2.micro:   {vcpu: 1, memory_gib: 1,  hourly_usd: 0.013}
+  t2.small:   {vcpu: 1, memory_gib: 2,  hourly_usd: 0.026}
+  t2.medium:  {vcpu: 2, memory_gib: 4,  hourly_usd: 0.052}
+  t2.large:   {vcpu: 2, memory_gib: 8,  hourly_usd: 0.104}
+  m4.large:   {vcpu: 2, memory_gib: 8,  hourly_usd: 0.126}
+  m4.xlarge:  {vcpu: 4, memory_gib: 16, hourly_usd: 0.252}
+  m4.2xlarge: {vcpu: 8, memory_gib: 32, hourly_usd: 0.504}
+
+ebs_gp2_gb_month: 0.10
+
+rds:
+  classes:            # name: hourly_usd (single-AZ MySQL)
+    db.t2.micro: 0.017
+    db.t2.small: 0.034
+    db.t2.medium: 0.068
+    db.m4.large: 0.175
+    db.m4.xlarge: 0.350
+  storage_gb_month: 0.115

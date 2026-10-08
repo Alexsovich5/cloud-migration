@@ -9,13 +9,16 @@ import logging
 import boto3
 from botocore.exceptions import ClientError
 
+import sizing
+
 logger = logging.getLogger('aws_connector')
 
 
 class AWSConnector:
     """Interface for AWS service operations during migration."""
 
-    def __init__(self, config):
+    def __init__(self, config, catalog):
+        self.catalog = catalog
         self.region = config.get('region', 'us-east-1')
         self.ec2 = boto3.client('ec2', region_name=self.region)
         self.s3 = boto3.client('s3', region_name=self.region)
@@ -109,14 +112,7 @@ class AWSConnector:
 
     def _get_instance_type(self, workload):
         """Determine instance type from workload profile."""
-        cpu = workload.get('cpu', 2)
-        memory = workload.get('memory', 4)
-        if cpu <= 2 and memory <= 4:
-            return 't2.medium'
-        elif cpu <= 4 and memory <= 8:
-            return 'm4.large'
-        else:
-            return 'm4.xlarge'
+        return sizing.recommend_instance(workload, self.catalog)
 
     def _create_ebs_volume(self, size, instance_id):
         """Create and attach an EBS volume."""
