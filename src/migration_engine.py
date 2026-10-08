@@ -72,7 +72,7 @@ class MigrationEngine:
         # Containerize if applicable
         if workload.get('containerizable', False):
             self.docker.build_image(workload)
-            self.docker.push_to_ecr(workload, self.aws)
+            self.docker.push(workload)
 
         # Migrate data
         if 'database' in workload:

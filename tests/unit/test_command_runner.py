@@ -1,4 +1,3 @@
-import subprocess
 import sys
 from unittest import mock
 
@@ -34,7 +33,7 @@ def test_push_and_analyze_route_through_runner():
             ' "Architecture": "amd64"}]', ''),
     ]
     builder = docker_builder.DockerBuilder({'registry': 'reg:5000'}, runner=runner)
-    assert builder.push_to_ecr({'name': 'portal'}, None) == 'reg:5000/portal:latest'
+    assert builder.push({'name': 'portal'}) == 'reg:5000/portal:latest'
     assert builder.analyze_image('portal:latest') == {
         'size_mb': 2.0, 'layers': 2, 'os': 'linux', 'arch': 'amd64'}
     argvs = [c[0][0] for c in runner.run.call_args_list]
@@ -43,9 +42,9 @@ def test_push_and_analyze_route_through_runner():
     assert argvs[2] == ['docker', 'inspect', 'portal:latest']
 
 
-def test_push_failure_raises_called_process_error():
+def test_push_failure_raises_docker_error():
     runner = mock.MagicMock()
     runner.run.side_effect = [(0, '', ''), (1, '', 'denied')]
     builder = docker_builder.DockerBuilder({'registry': 'reg:5000'}, runner=runner)
-    with pytest.raises(subprocess.CalledProcessError):
-        builder.push_to_ecr({'name': 'portal'}, None)
+    with pytest.raises(docker_builder.DockerError):
+        builder.push({'name': 'portal'})
