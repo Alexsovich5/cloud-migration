@@ -1,6 +1,6 @@
 # cloud-migration — Implementation Plan
 
-This plan implements `docs/SPEC.md` in 17 tasks, T1 to T17. Each task is exactly one commit and leaves `make test` green. The tasks are ordered by dependency.
+This plan implements `docs/SPEC.md` in 18 tasks, T1 to T18. Each task is exactly one commit and leaves `make test` green. The tasks are ordered by dependency.
 
 ## Conventions for every task
 
@@ -797,3 +797,38 @@ Regenerate README with honest status and generated layout
 Describe implemented features, simulated AWS/SSH/Docker integrations and
 known limitations, with the file tree taken from git ls-files.
 ```
+
+---
+
+## T18 — Security and hygiene hardening
+
+**Goal:** Review the whole repository and fix what an attacker or a misbehaving host could exploit. Also fix the places where missing data was treated as OK.
+
+**Found and changed:**
+- **SSH host keys were not verified (blocker).** `SSHProbe` used `paramiko.AutoAddPolicy` and then sent a password, so any man in the middle could collect the credentials.
+  - `discovery.HostKeyVerifier` (a `RejectPolicy` subclass) now checks the key after key exchange and before authentication. Unknown keys are rejected.
+  - Keys are accepted when they are listed in `~/.ssh/known_hosts` or the source's `known_hosts`, or when they match `host_key_fingerprint` (OpenSSH `SHA256:` form). A pin is always enforced, and a changed key is always rejected.
+  - `trust_on_first_use: true` is an explicit opt-in. It requires `known_hosts`, appends the key there and logs its fingerprint.
+  - `AutoAddPolicy` no longer appears anywhere in the repo.
+  - The fake SSH server's generated host key is written to a per-test known_hosts, so the integration tests run with verification on.
+- **SSH command output was unbounded (blocker).**
+  - `stdout.read()` followed by `stderr.read()` had no size cap and only an inactivity timeout. A trickling host could stall the run forever, and a full stderr window deadlocked the stdout read.
+  - `discovery.read_bounded` now drains both streams together into lists. It enforces `max_output_bytes` (default 1 MiB) and an overall `command_timeout` (default 60 s), and raises a `DiscoveryError` naming the host and the limit.
+  - A watchdog closes the transport if opening the channel or starting the command hangs past the deadline.
+- **The S3 artifacts bucket could be squatted (blocker).**
+  - Before this fix, the default bucket name `migration-artifacts` was used, and any `head_bucket` error led to `create_bucket` followed by uploads.
+  - `aws.artifacts_bucket` is now required, with no default (`ConfigError`, exit 2). Only 404/`NoSuchBucket` creates the bucket; 403 and all other errors raise `BucketAccessError`.
+  - Before any upload, `get_bucket_acl()['Owner']['ID']` must equal `list_buckets()['Owner']['ID']`. This is checked again after a create, and AccessDenied refuses the upload.
+  - `ServerSideEncryption='AES256'` was already set.
+  - **Deviation:** moto 0.4.14 has no bucket ACL support. `docker/moto/serve.py` starts `moto_server` with `GET/PUT /<bucket>?acl` added, and the PUT lets tests stage a foreign-owned bucket.
+  - `config/demo.yml` names `demo-artifacts`. `config/migration.yml` leaves the bucket empty for `--tfstate` to fill.
+- **`--assess` never ran SSH discovery (major).** `MigrationEngine.assess_workloads` did not pass a probe factory, so `source` blocks were ignored by the CLI. It now passes `discovery.probe_from_source`, which can be overridden for tests.
+- **A failed discovery counted as ready (minor).** A workload whose dependency discovery failed now gets the blocker "Dependency discovery failed; dependencies are unverified".
+- **Source block validation (minor).** `config.validate` checks `source` blocks: `host` is required; `known_hosts` and `host_key_fingerprint` must be strings; `trust_on_first_use` must be a bool and needs `known_hosts`; `max_output_bytes` and `command_timeout` must be > 0.
+- **Symlinks out of `data_path` (minor).** A file symlink in `data_path` that resolves outside it now stops the migration before any upload.
+- **Secrets audit.** Sentinel passwords were checked for the SSH login (failure paths: auth failure, unknown host key, connection refused and command timeout) and for the RDS master password (failure path: a `create_db_instance` error). Neither appears in exceptions, assessment results, the state file, logs or stdout/stderr. These tests guard that, and no code change was needed.
+- **Test support:** `tests/support/logs.py` provides a `logs` fixture, because pytest 2.8 has no `caplog`.
+
+**Not changed (recorded as limitations):** a migration overwrites objects that already exist under `<workload>/` in the artifacts bucket, and rollback deletes them.
+
+**Acceptance command:** `make test`

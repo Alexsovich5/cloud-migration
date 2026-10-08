@@ -132,3 +132,34 @@ def test_sample_config_uses_private_registry_and_password_envs():
             assert '://' not in service['endpoint']
         if w['runtime'] != 'python':
             assert 'entrypoint' not in w
+
+
+def with_source(valid_cfg, source):
+    cfg = copy.deepcopy(valid_cfg)
+    cfg['workloads'][0]['source'] = source
+    return cfg
+
+
+def test_source_block_with_host_key_settings_is_valid(valid_cfg):
+    config.validate(with_source(valid_cfg, {
+        'host': '10.0.0.12', 'port': 22, 'username': 'migrate',
+        'known_hosts': 'config/known_hosts', 'host_key_fingerprint': 'SHA256:abc',
+        'trust_on_first_use': False, 'max_output_bytes': 4096, 'command_timeout': 30}))
+
+
+@pytest.mark.parametrize('source,path', [
+    ('10.0.0.12', 'workloads[0].source'),
+    ({'port': 22}, 'workloads[0].source.host'),
+    ({'host': '10.0.0.12', 'trust_on_first_use': True},
+     'workloads[0].source.known_hosts'),
+    ({'host': '10.0.0.12', 'trust_on_first_use': 'yes', 'known_hosts': 'kh'},
+     'workloads[0].source.trust_on_first_use'),
+    ({'host': '10.0.0.12', 'host_key_fingerprint': 42},
+     'workloads[0].source.host_key_fingerprint'),
+    ({'host': '10.0.0.12', 'max_output_bytes': 0}, 'workloads[0].source.max_output_bytes'),
+    ({'host': '10.0.0.12', 'command_timeout': -1}, 'workloads[0].source.command_timeout'),
+])
+def test_invalid_source_block_raises(valid_cfg, source, path):
+    with pytest.raises(config.ConfigError) as err:
+        config.validate(with_source(valid_cfg, source))
+    assert str(err.value).startswith(path + ':')

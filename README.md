@@ -10,11 +10,11 @@ Personal project built on the 2015-era stack (Python 3.4, boto3 1.1.4, paramiko 
 
 - Configuration loading and validation with path-qualified errors such as `workloads[1].cpu: expected int` — `src/config.py`, tested in `tests/unit/test_config.py`.
 - Workload assessment: declared dependencies, resource profile, rehost/replatform/refactor strategy, 0–100 risk score, blockers and a `ready` flag, written to a JSON file — `src/assessment.py`, tested in `tests/unit/test_assessment.py`.
-- Dependency mapping over SSH: runs `netstat -tan` (falling back to `ss -tan`) with paramiko and reports listening ports and undeclared outbound peers — `src/discovery.py`, tested in `tests/unit/test_discovery.py` and `tests/integration/test_ssh_discovery.py`.
+- Dependency mapping over SSH during `--assess`: runs `netstat -tan` (falling back to `ss -tan`) with paramiko and reports listening ports and undeclared outbound peers. The host key is verified before any password is sent (known_hosts, a pinned SHA256 fingerprint, or opt-in trust-on-first-use), and each command is capped at 1 MiB of output and 60 s by default. A workload whose discovery failed is not marked ready — `src/discovery.py`, tested in `tests/unit/test_discovery.py` and `tests/integration/test_ssh_discovery.py`.
 - Right-sizing and monthly cost estimation from the static catalog in `config/pricing.yml` — `src/sizing.py`, tested in `tests/unit/test_sizing.py`.
 - Terraform 0.6.3 landing zone: VPC, two public and two private subnets, internet gateway, route table, app security group, DB subnet group and an artifacts bucket whose policy denies unencrypted uploads — `terraform/`, tested in `tests/unit/test_terraform_config.py` and by `scripts/tf_plan_check.sh`.
 - Per-workload provisioning of a security group, EC2 instance with tags, gp2 EBS volume and RDS instance (`StorageEncrypted=True`), each recorded in a resource ledger — `src/aws_connector.py`, tested in `tests/unit/test_aws_connector.py`, `tests/unit/test_aws_connector_endpoints.py` and `tests/integration/test_provisioning.py`.
-- Data migration to S3 with `AES256` server-side encryption, local MD5 compared with the `put_object` and `head_object` ETags, and a JSON manifest — `src/data_migration.py`, tested in `tests/unit/test_data_migration.py` and `tests/integration/test_data_migration_s3.py`.
+- Data migration to S3 with `AES256` server-side encryption, local MD5 compared with the `put_object` and `head_object` ETags, and a JSON manifest. The artifacts bucket must be configured (there is no default name). It is created only when S3 says it does not exist, and nothing is uploaded unless its ACL owner is this account's canonical ID — `src/data_migration.py`, tested in `tests/unit/test_data_migration.py` and `tests/integration/test_data_migration_s3.py`.
 - Docker pipeline: Dockerfile generation for python, node, java and php runtimes, exec-form `CMD`, build/tag/push to a configured private registry through an injectable command runner, and a `docker inspect` summary — `src/docker_builder.py`, tested in `tests/unit/test_docker_builder.py` and `tests/unit/test_command_runner.py`.
 - Post-migration validation: instance state, a TCP connect to the workload's validation endpoint, and re-verification of the data manifest against S3 — `src/validation.py`, tested in `tests/unit/test_validation.py`.
 - Rollback of a failed workload (or `--rollback NAME`) in reverse creation order, treating missing resources as already deleted — `src/rollback.py`, tested in `tests/unit/test_rollback.py` and `tests/integration/test_rollback_moto.py`.
@@ -29,7 +29,10 @@ Added in the rebuild (not part of the original feature list):
 **Not implemented / known limitations**
 
 - AWS EC2, S3 and RDS are simulated with moto 0.4.14 servers; nothing has been run against a real AWS account.
-- Source hosts are simulated by an in-process paramiko SSH server in tests.
+- Source hosts are simulated by an in-process paramiko SSH server in tests; its host key is generated per test run and exported to a test known_hosts file.
+- moto 0.4.14 has no bucket ACLs. `docker/moto/serve.py` adds `GET/PUT /<bucket>?acl` to the S3 simulator so the bucket ownership check can be tested, including a bucket staged as owned by another account.
+- Host key types: the probe compares the key type paramiko negotiates (RSA first in paramiko 1.15). If known_hosts holds only another type for a host (for example ECDSA), the host is rejected as changed rather than matched. Pin the fingerprint or add the RSA key.
+- A migration overwrites objects that already exist under `<workload>/` in the artifacts bucket, and rolling it back deletes them; use a bucket dedicated to migration artifacts.
 - Docker build/push is exercised only through a recording fake docker command; no real registry is used.
 - Terraform is checked with `terraform graph`, pyhcl/raw-text tests and an offline `terraform plan` that stops at configuration validation; it has never been planned against AWS or applied.
 - moto 0.4.14 RDS ignores StorageEncrypted, so RDS encryption is shown only by unit tests.
@@ -65,6 +68,22 @@ docker compose up -d moto-ec2 moto-s3 moto-rds   # start the AWS simulators
 make demo                                        # assess, migrate and report using config/demo.yml
 ```
 
+`aws.artifacts_bucket` must name a bucket this account owns, or be left empty and filled from the Terraform output with `--tfstate`.
+
+A workload `source` block turns on SSH discovery during `--assess`. The host key must be known before the probe will log in:
+
+```yaml
+source:
+  host: 10.0.0.12
+  username: migrate
+  key_file: ~/.ssh/id_rsa
+  known_hosts: config/known_hosts            # checked together with ~/.ssh/known_hosts
+  # host_key_fingerprint: "SHA256:..."       # optional pin, as printed by ssh-keygen -lf
+  # trust_on_first_use: true                 # record an unknown key in known_hosts (logged)
+  # max_output_bytes: 1048576                # per command, stdout + stderr
+  # command_timeout: 60                      # seconds per command
+```
+
 ## Tests
 
 ```bash
@@ -90,6 +109,7 @@ docker/
   moto/
     Dockerfile
     requirements.txt
+    serve.py
 docs/
   IMPLEMENTATION_PLAN.md
   SPEC.md
@@ -156,6 +176,7 @@ tests/
     aws.py
     fake_docker.py
     fake_ssh.py
+    logs.py
   unit/
     __init__.py
     test_assessment.py

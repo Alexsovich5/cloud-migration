@@ -4,7 +4,13 @@ A small in-process SSH server for discovery tests.
 It listens on 127.0.0.1 on a free port, accepts one username/password pair
 and answers ``exec`` requests for ``netstat -tan`` and ``ss -tan`` with
 fixture text. ``netstat_exit=127`` makes netstat behave as if it were not
-installed, so the ``ss`` fallback can be exercised.
+installed, so the ``ss`` fallback can be exercised. ``handlers`` maps a
+command to a function that writes the reply to the channel itself, for
+misbehaving hosts (endless or trickling output, large stderr).
+
+Every password attempt is recorded in ``auth_attempts``, so tests can show
+that a rejected host key stops the client before it sends credentials.
+``write_known_hosts`` exports the server's host key in OpenSSH format.
 """
 
 import os
@@ -44,6 +50,7 @@ class _Server(paramiko.ServerInterface):
         return 'password'
 
     def check_auth_password(self, username, password):
+        self.fake.auth_attempts.append(username)
         if username == self.fake.username and password == self.fake.password:
             return paramiko.AUTH_SUCCESSFUL
         return paramiko.AUTH_FAILED
@@ -57,9 +64,12 @@ class _Server(paramiko.ServerInterface):
         if isinstance(command, bytes):
             command = command.decode('utf-8')
         self.fake.commands.append(command)
-        stdout, stderr, status = self.fake.respond(command)
-        thread = threading.Thread(target=_reply,
-                                  args=(channel, stdout, stderr, status))
+        handler = self.fake.handlers.get(command.strip())
+        if handler is not None:
+            target, args = _run_handler, (channel, handler)
+        else:
+            target, args = _reply, (channel,) + self.fake.respond(command)
+        thread = threading.Thread(target=target, args=args)
         thread.daemon = True
         thread.start()
         return True
@@ -84,14 +94,33 @@ def _reply(channel, stdout, stderr, status):
         channel.close()
 
 
+def _run_handler(channel, handler):
+    time.sleep(REPLY_DELAY)
+    try:
+        handler(channel)
+    except (OSError, socket.error, EOFError):
+        # The client closed the channel while the handler was still writing.
+        pass
+    finally:
+        channel.close()
+
+
+def known_hosts_line(port, key, host='127.0.0.1'):
+    """One OpenSSH known_hosts line for ``key`` served on host:port."""
+    name = host if port == 22 else '[{0}]:{1}'.format(host, port)
+    return '{0} {1} {2}\n'.format(name, key.get_name(), key.get_base64())
+
+
 class FakeSSHServer(object):
     """Threaded SSH server; use as a context manager or call start()/stop()."""
 
-    def __init__(self, username='migrate', password='pw', netstat_exit=0):
+    def __init__(self, username='migrate', password='pw', netstat_exit=0, handlers=None):
         self.username = username
         self.password = password
         self.netstat_exit = netstat_exit
+        self.handlers = dict(handlers or {})
         self.commands = []
+        self.auth_attempts = []
         self.port = None
         self._sock = None
         self._thread = None
@@ -108,6 +137,12 @@ class FakeSSHServer(object):
         if command.strip() == 'ss -tan':
             return read_fixture('ss_tan.txt'), '', 0
         return '', 'bash: {0}: command not found\n'.format(name), 127
+
+    def write_known_hosts(self, path):
+        """Write this server's host key to ``path`` and return the path."""
+        with open(path, 'w') as handle:
+            handle.write(known_hosts_line(self.port, host_key()))
+        return path
 
     def start(self):
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

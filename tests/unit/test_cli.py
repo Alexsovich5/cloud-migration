@@ -33,6 +33,22 @@ def test_missing_config_exits_2_with_message(tmpdir, capsys):
     assert 'cannot read config' in err
 
 
+@pytest.mark.parametrize('action', [['--assess'], ['--migrate'], ['--rollback', 'web-portal']])
+def test_missing_artifacts_bucket_exits_2_with_message(tmpdir, capsys, action):
+    with open(VALID) as handle:
+        text = handle.read()
+    assert 'artifacts_bucket: unit-artifacts' in text
+    config_path = str(tmpdir.join('no-bucket.yml'))
+    with open(config_path, 'w') as handle:
+        handle.write(text.replace('  artifacts_bucket: unit-artifacts\n', ''))
+
+    code = migration_engine.main(['--config', config_path, '--state',
+                                  str(tmpdir.join('state.json'))] + action)
+
+    assert code == 2
+    assert 'aws.artifacts_bucket: required' in capsys.readouterr()[1]
+
+
 def test_assess_and_migrate_are_mutually_exclusive(capsys):
     with pytest.raises(SystemExit) as exc:
         migration_engine.main(['--config', VALID, '--assess', '--migrate'])

@@ -92,6 +92,8 @@ def resource_profile(w, catalog):
     }
 
 
+DISCOVERY_FAILED = 'Dependency discovery failed; dependencies are unverified'
+
 DISCOVERY_ERRORS = (paramiko.SSHException, discovery.DiscoveryError,
                     socket.error, OSError, EOFError)
 
@@ -102,7 +104,8 @@ def observe_dependencies(w, declared, probe_factory):
     Returns ``(dependencies, listening_ports, error)``. The SSH port the probe
     connected through is left out of ``listening_ports``. On an SSH or
     discovery failure the declared list is returned unchanged with the error
-    text, so one unreachable host does not stop the assessment.
+    text, so one unreachable host does not stop the assessment; ``assess``
+    then lists the failure as a blocker.
     """
     source = w.get('source')
     if not source or probe_factory is None:
@@ -132,6 +135,8 @@ def assess(workloads, catalog, probe_factory=None):
         found = blockers(w)
         deps, listening, error = observe_dependencies(
             w, discover_declared_dependencies(w), probe_factory)
+        if error is not None:
+            found.append(DISCOVERY_FAILED)
         result = {
             'name': w['name'],
             'type': w.get('type', 'unknown'),

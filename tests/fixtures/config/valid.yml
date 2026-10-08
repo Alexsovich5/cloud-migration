@@ -1,5 +1,6 @@
 aws:
   default_ami: ami-1a2b3c4d
+  artifacts_bucket: unit-artifacts
 docker:
   registry: registry.local:5000
 workloads:

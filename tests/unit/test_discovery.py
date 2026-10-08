@@ -1,5 +1,8 @@
+import base64
+import hashlib
 import os
 
+import paramiko
 import pytest
 
 import assessment
@@ -148,7 +151,9 @@ def test_assess_records_discovery_error_and_continues():
     assert 'netstat and ss both failed' in result['discovery_error']
     assert result['listening_ports'] == []
     assert [d['type'] for d in result['dependencies']] == ['database', 'service']
-    assert result['ready'] is True
+    # Unknown dependencies are not "no dependencies": the workload is not ready.
+    assert result['ready'] is False
+    assert result['blockers'] == ['Dependency discovery failed; dependencies are unverified']
 
 
 def test_assess_skips_probe_without_source_or_factory():
@@ -163,3 +168,164 @@ def test_assess_skips_probe_without_source_or_factory():
     result = assessment.assess([portal_workload()], catalog)[0]
     assert result['listening_ports'] == []
     assert 'discovery_error' not in result
+
+
+# Host key verification
+
+KEY = paramiko.RSAKey.generate(1024)
+OTHER = paramiko.RSAKey.generate(1024)
+HOST = '[10.0.0.12]:2222'
+
+
+def write_known_hosts(tmpdir, key, host=HOST):
+    path = str(tmpdir.join('known_hosts'))
+    with open(path, 'w') as handle:
+        handle.write('{0} {1} {2}\n'.format(host, key.get_name(), key.get_base64()))
+    return path
+
+
+def test_fingerprint_is_openssh_sha256_format():
+    digest = hashlib.sha256(KEY.asbytes()).digest()
+    expected = 'SHA256:' + base64.b64encode(digest).decode('ascii').rstrip('=')
+    assert discovery.fingerprint(KEY) == expected
+
+
+def test_verifier_rejects_unknown_key_by_default(tmpdir):
+    verifier = discovery.HostKeyVerifier(system_host_keys=False)
+    with pytest.raises(discovery.HostKeyError) as err:
+        verifier.missing_host_key(None, HOST, KEY)
+    assert 'unknown host key' in str(err.value)
+    assert isinstance(err.value, paramiko.SSHException)
+    assert isinstance(verifier, paramiko.RejectPolicy)
+
+
+def test_verifier_accepts_key_listed_in_known_hosts(tmpdir):
+    verifier = discovery.HostKeyVerifier(write_known_hosts(tmpdir, KEY),
+                                         system_host_keys=False)
+    verifier.missing_host_key(None, HOST, KEY)
+
+
+def test_verifier_rejects_changed_key(tmpdir):
+    verifier = discovery.HostKeyVerifier(write_known_hosts(tmpdir, OTHER),
+                                         system_host_keys=False)
+    with pytest.raises(discovery.HostKeyError) as err:
+        verifier.missing_host_key(None, HOST, KEY)
+    assert 'changed' in str(err.value)
+
+
+@pytest.mark.parametrize('form', ['full', 'bare', 'padded'])
+def test_verifier_accepts_pinned_fingerprint(form):
+    pin = discovery.fingerprint(KEY)
+    if form == 'bare':
+        pin = pin[len('SHA256:'):]
+    elif form == 'padded':
+        pin += '='
+    verifier = discovery.HostKeyVerifier(fingerprint=pin, system_host_keys=False)
+    verifier.missing_host_key(None, HOST, KEY)
+
+
+def test_verifier_rejects_pin_mismatch_even_for_known_key(tmpdir):
+    verifier = discovery.HostKeyVerifier(write_known_hosts(tmpdir, KEY),
+                                         fingerprint=discovery.fingerprint(OTHER),
+                                         system_host_keys=False)
+    with pytest.raises(discovery.HostKeyError) as err:
+        verifier.missing_host_key(None, HOST, KEY)
+    assert 'pinned' in str(err.value)
+
+
+def test_trust_on_first_use_appends_to_known_hosts(tmpdir, logs):
+    path = str(tmpdir.join('ssh', 'known_hosts'))
+    verifier = discovery.HostKeyVerifier(path, trust_on_first_use=True,
+                                         system_host_keys=False)
+    verifier.missing_host_key(None, HOST, KEY)
+
+    with open(path) as handle:
+        assert handle.read() == '{0} {1} {2}\n'.format(HOST, KEY.get_name(), KEY.get_base64())
+    assert discovery.fingerprint(KEY) in logs.text()
+    assert 'first use' in logs.text()
+    # Once recorded, a different key for the same host is a changed key.
+    with pytest.raises(discovery.HostKeyError):
+        verifier.missing_host_key(None, HOST, OTHER)
+
+
+def test_trust_on_first_use_requires_a_known_hosts_file():
+    with pytest.raises(ValueError):
+        discovery.HostKeyVerifier(trust_on_first_use=True, system_host_keys=False)
+
+
+def test_probe_from_source_passes_host_key_and_limit_settings():
+    probe = discovery.probe_from_source({
+        'host': '10.0.0.12', 'port': 2222, 'known_hosts': '/etc/migration/known_hosts',
+        'host_key_fingerprint': discovery.fingerprint(KEY), 'trust_on_first_use': False,
+        'max_output_bytes': 4096, 'command_timeout': 7})
+    assert probe.verifier.known_hosts_path == '/etc/migration/known_hosts'
+    assert probe.verifier.pinned == discovery.fingerprint(KEY)
+    assert probe.verifier.trust_on_first_use is False
+    assert probe.max_output_bytes == 4096
+    assert probe.command_timeout == 7
+
+
+# Bounded command reader
+
+class ScriptedChannel(object):
+    """Channel stand-in that hands out queued stdout/stderr chunks."""
+
+    def __init__(self, stdout=(), stderr=(), status=0, endless=None):
+        self.stdout = list(stdout)
+        self.stderr = list(stderr)
+        self.status = status
+        self.endless = endless
+        self.closed = False
+
+    def recv_ready(self):
+        return bool(self.stdout) or self.endless is not None
+
+    def recv_stderr_ready(self):
+        return bool(self.stderr)
+
+    def recv(self, size):
+        if self.endless is not None:
+            return self.endless[:size]
+        return self.stdout.pop(0)
+
+    def recv_stderr(self, size):
+        return self.stderr.pop(0)
+
+    def exit_status_ready(self):
+        return self.endless is None and not self.stdout and not self.stderr
+
+    def recv_exit_status(self):
+        return self.status
+
+    def close(self):
+        self.closed = True
+
+
+def test_read_bounded_returns_both_streams_and_status():
+    channel = ScriptedChannel([b'out1 ', b'out2'], [b'err'], status=3)
+    status, out, err = discovery.read_bounded(channel, 'h1', 'netstat -tan', 1024, 5)
+    assert (status, out, err) == (3, 'out1 out2', 'err')
+
+
+def test_read_bounded_counts_stderr_towards_the_cap():
+    channel = ScriptedChannel([b'a' * 10], [b'b' * 20])
+    with pytest.raises(discovery.DiscoveryError) as err:
+        discovery.read_bounded(channel, 'h1', 'netstat -tan', 25, 5)
+    assert "h1: 'netstat -tan' output exceeded 25 bytes" in str(err.value)
+    assert channel.closed
+
+
+def test_read_bounded_stops_endless_output_at_the_cap():
+    channel = ScriptedChannel(endless=b'x' * 4096)
+    with pytest.raises(discovery.DiscoveryError):
+        discovery.read_bounded(channel, 'h1', 'netstat -tan', 10000, 5)
+    assert channel.closed
+
+
+def test_read_bounded_enforces_overall_deadline():
+    channel = ScriptedChannel()
+    channel.exit_status_ready = lambda: False
+    with pytest.raises(discovery.DiscoveryError) as err:
+        discovery.read_bounded(channel, 'h1', 'ss -tan', 1024, 0.2)
+    assert "h1: 'ss -tan' did not finish within 0.2s" in str(err.value)
+    assert channel.closed

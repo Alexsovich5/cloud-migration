@@ -125,8 +125,12 @@ def test_engine_writes_assessment_to_given_path(tmpdir, monkeypatch):
     from unittest import mock
     import migration_engine
     monkeypatch.chdir(REPO_ROOT)
+    # The sample config leaves aws.artifacts_bucket empty for --tfstate to fill.
+    tfstate = os.path.join(REPO_ROOT, 'tests', 'fixtures', 'terraform.tfstate')
     with mock.patch('boto3.session.Session'):
-        engine = migration_engine.MigrationEngine(SAMPLE_CONFIG)
+        engine = migration_engine.MigrationEngine(
+            SAMPLE_CONFIG, str(tmpdir.join('state.json')), tfstate_path=tfstate)
+    assert engine.data_migrator.bucket == 'migration-artifacts'
     path = str(tmpdir.join('results.json'))
     results = engine.assess_workloads(path)
     with open(path) as f:

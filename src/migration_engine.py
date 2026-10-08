@@ -14,6 +14,7 @@ import sys
 
 import assessment
 import config
+import discovery
 import report
 import rollback
 import sizing
@@ -46,7 +47,7 @@ class MigrationEngine:
 
     def __init__(self, config_path='config/migration.yml', state_path=DEFAULT_STATE_PATH,
                  tfstate_path=None, session=None, runner=None, aws=None, docker=None,
-                 data_migrator=None, validator=None):
+                 data_migrator=None, validator=None, probe_factory=None):
         self.config = self._load_config(config_path)
         self.state_path = state_path
         self.tfstate_path = tfstate_path
@@ -55,15 +56,19 @@ class MigrationEngine:
             logger.info("Terraform outputs loaded from %s", tfstate_path)
         self.catalog = sizing.Catalog.from_file(self.config['pricing_file'])
         aws_cfg = self.config.get('aws', {})
+        # Checked after the Terraform outputs are merged, which may supply it.
+        bucket = artifacts_bucket(aws_cfg) if data_migrator is None else None
         self.aws = aws if aws is not None else AWSConnector(aws_cfg, self.catalog,
                                                             session=session)
         self.docker = docker if docker is not None else DockerBuilder(
             self.config.get('docker', {}), runner=runner)
         self.data_migrator = data_migrator if data_migrator is not None else DataMigrator(
-            self.aws.s3, artifacts_bucket(aws_cfg))
+            self.aws.s3, bucket)
         self.validator = validator if validator is not None else Validator(
             self.aws, self.data_migrator)
         self.manifest_dir = os.path.dirname(os.path.abspath(state_path))
+        self.probe_factory = (probe_factory if probe_factory is not None
+                              else discovery.probe_from_source)
 
     def _load_config(self, path):
         """Load and validate migration configuration (raises ConfigError)."""
@@ -77,7 +82,8 @@ class MigrationEngine:
     def assess_workloads(self, output_path='assessment_results.json'):
         """Assess workloads, write the results and mark pending ones assessed."""
         logger.info("Starting workload assessment...")
-        results = assessment.assess(self.config['workloads'], self.catalog)
+        results = assessment.assess(self.config['workloads'], self.catalog,
+                                    probe_factory=self.probe_factory)
         assessment.write_results(results, output_path)
 
         st = self._load_state()

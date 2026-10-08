@@ -103,14 +103,15 @@ def test_aws_connector_delegates_instance_type(catalog):
 def test_engine_delegates_to_sizing(tmpdir):
     import migration_engine
     config = tmpdir.join('migration.yml')
-    config.write('aws: {{region: us-east-1}}\n'
+    config.write('aws: {{region: us-east-1, artifacts_bucket: unit-artifacts}}\n'
                  'pricing_file: {0}\n'
                  'workloads:\n'
                  '  - {{name: tiny, cpu: 1, memory: 1}}\n'
                  '  - {{name: web-portal, cpu: 2, memory: 4, storage: 50,\n'
                  '     database: {{engine: mysql, storage: 100}}}}\n'.format(PRICING_FILE))
     with mock.patch('boto3.session.Session'):
-        engine = migration_engine.MigrationEngine(str(config))
+        engine = migration_engine.MigrationEngine(str(config),
+                                                  str(tmpdir.join('state.json')))
     tiny, portal = engine.assess_workloads(str(tmpdir.join('out.json')))
     assert tiny['resource_profile']['recommended_instance'] == 't2.micro'
     assert portal['estimated_cost']['total'] == 182.21

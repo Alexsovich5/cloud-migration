@@ -158,6 +158,9 @@ def _validate_workload(prefix, w):
             _fail(prefix + '.database.engine',
                   'expected one of {0}'.format(', '.join(DB_ENGINES)))
 
+    if 'source' in w:
+        _validate_source(prefix + '.source', w['source'])
+
     if 'utilization' in w:
         util = w['utilization']
         if not isinstance(util, dict):
@@ -168,3 +171,22 @@ def _validate_workload(prefix, w):
                 if not _is_number(value) or not 1 <= value <= 100:
                     _fail('{0}.utilization.{1}'.format(prefix, key),
                           'expected percentage between 1 and 100')
+
+
+def _validate_source(prefix, source):
+    """Check the SSH discovery settings of a workload ``source`` block."""
+    if not isinstance(source, dict):
+        _fail(prefix, 'expected mapping')
+    if not isinstance(source.get('host'), str) or not source['host']:
+        _fail(prefix + '.host', 'required')
+    for key in ('known_hosts', 'host_key_fingerprint'):
+        if key in source and not isinstance(source[key], str):
+            _fail('{0}.{1}'.format(prefix, key), 'expected string')
+    tofu = source.get('trust_on_first_use', False)
+    if not isinstance(tofu, bool):
+        _fail(prefix + '.trust_on_first_use', 'expected true or false')
+    if tofu and not source.get('known_hosts'):
+        _fail(prefix + '.known_hosts', 'required with trust_on_first_use')
+    for key in ('max_output_bytes', 'command_timeout'):
+        if key in source and (not _is_number(source[key]) or source[key] <= 0):
+            _fail('{0}.{1}'.format(prefix, key), 'expected number > 0')

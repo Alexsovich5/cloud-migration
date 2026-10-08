@@ -25,6 +25,15 @@ def test_s3_create_bucket_path_style():
     assert 'probe' in names
 
 
+def test_s3_bucket_acl_reports_the_list_buckets_owner():
+    s3 = aws.client('s3')
+    bucket = unique('acl')
+    s3.create_bucket(Bucket=bucket)
+    own = s3.list_buckets()['Owner']['ID']
+    assert own
+    assert s3.get_bucket_acl(Bucket=bucket)['Owner']['ID'] == own
+
+
 def test_rds_describe_db_instances_returns_list():
     response = aws.client('rds').describe_db_instances()
     assert isinstance(response['DBInstances'], list)

@@ -216,3 +216,100 @@ def test_assess_moves_pending_to_assessed_only(paths, parts, tmpdir):
     status, history, _ = statuses(paths[1], 'batch-job')
     assert status == state_mod.COMPLETED
     assert history == ['provisioning', 'provisioned', 'validated', 'completed']
+
+
+def test_engine_without_artifacts_bucket_raises_config_error(paths):
+    with pytest.raises(migration_engine.config.ConfigError) as err:
+        MigrationEngine(paths[0], paths[1], aws=mock.MagicMock())
+    assert 'aws.artifacts_bucket' in str(err.value)
+
+
+def test_engine_uses_configured_artifacts_bucket(paths, tmpdir):
+    config_path = str(tmpdir.join('with-bucket.yml'))
+    with open(paths[0]) as handle:
+        text = handle.read()
+    with open(config_path, 'w') as handle:
+        handle.write(text.replace('aws:\n', 'aws:\n  artifacts_bucket: my-artifacts\n', 1))
+    engine = MigrationEngine(config_path, paths[1], aws=mock.MagicMock())
+    assert engine.data_migrator.bucket == 'my-artifacts'
+
+
+def test_assess_probes_source_hosts_with_the_ssh_probe(paths, parts, tmpdir):
+    engine = make_engine(paths, parts)
+    assert engine.probe_factory is migration_engine.discovery.probe_from_source
+    engine.config['workloads'][1]['source'] = {'host': '10.0.0.50', 'port': 22}
+    seen = []
+
+    class Probe(object):
+        def collect(self):
+            return {'listening': [22, 8080], 'established': [('10.0.0.60', 5432)]}
+
+    def factory(source):
+        seen.append(source['host'])
+        return Probe()
+
+    engine.probe_factory = factory
+    results = engine.assess_workloads(str(tmpdir.join('assessment.json')))
+
+    assert seen == ['10.0.0.50']
+    batch = [r for r in results if r['name'] == 'batch-job'][0]
+    assert batch['listening_ports'] == [8080]
+    assert batch['dependencies'] == [
+        {'type': 'undeclared', 'endpoint': '10.0.0.60:5432', 'source': 'ssh'}]
+
+
+SECRET_CONFIG = """
+pricing_file: {pricing}
+aws:
+  default_ami: ami-1a2b3c4d
+  artifacts_bucket: unit-artifacts
+workloads:
+  - name: orders
+    type: stateful
+    runtime: python
+    cpu: 1
+    memory: 1
+    database:
+      engine: mysql
+      name: orders_db
+      username: orders
+      password_env: SENTINEL_DB_PASSWORD
+"""
+
+
+def test_db_password_never_reaches_state_logs_or_output(tmpdir, monkeypatch, logs, capsys):
+    from botocore.exceptions import ClientError
+    from aws_connector import AWSConnector
+    from sizing import Catalog
+
+    sentinel = 'S3NTINEL-pw'
+    monkeypatch.setenv('SENTINEL_DB_PASSWORD', sentinel)
+    config_path = tmpdir.join('secret.yml')
+    config_path.write(SECRET_CONFIG.format(pricing=PRICING))
+    state_path = str(tmpdir.join('state.json'))
+
+    clients = dict((svc, mock.MagicMock()) for svc in ('ec2', 's3', 'rds'))
+    clients['ec2'].create_security_group.return_value = {'GroupId': 'sg-1'}
+    clients['ec2'].run_instances.return_value = {'Instances': [{'InstanceId': 'i-1'}]}
+    clients['rds'].create_db_instance.side_effect = ClientError(
+        {'Error': {'Code': 'InvalidParameterValue', 'Message': 'bad master password'}},
+        'CreateDBInstance')
+    session = mock.MagicMock()
+    session.client.side_effect = lambda svc, **kwargs: clients[svc]
+    connector = AWSConnector({'region': 'us-east-1'}, Catalog.from_file(PRICING),
+                             session=session)
+    engine = MigrationEngine(str(config_path), state_path, aws=connector,
+                             docker=mock.MagicMock(), validator=mock.MagicMock())
+
+    with mock.patch.object(migration_engine.rollback, 'run', side_effect=fake_rollback):
+        assert engine.execute_migration() is False
+
+    sent = clients['rds'].create_db_instance.call_args[1]['MasterUserPassword']
+    assert sent == sentinel
+    with open(state_path) as handle:
+        saved = handle.read()
+    assert sentinel not in saved
+    assert 'bad master password' in logs.text()
+    assert sentinel not in logs.text()
+    out, err = capsys.readouterr()
+    assert sentinel not in out + err

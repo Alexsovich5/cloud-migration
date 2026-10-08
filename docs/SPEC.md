@@ -35,6 +35,9 @@ The rebuild keeps the technical concept of the original README and trims it to a
 
    The results are written to a JSON file. (Original: "Automated workload assessment".)
 3. **Dependency mapping over SSH.** When a workload has a `source` host block, the engine connects with paramiko and runs `netstat -tan` (falling back to `ss -tan`). It parses the output into LISTEN ports and ESTABLISHED outbound peers, and merges these with the dependencies declared in config. Peers are matched to known endpoints (`host:port`). Anything unmatched is reported as `undeclared`. (Original: "dependency mapping".)
+   - The host key is checked before any credentials are sent: unknown keys are rejected (as with paramiko `RejectPolicy`). A key is accepted when it is listed in `~/.ssh/known_hosts` or the source's `known_hosts` file, or matches a pinned `host_key_fingerprint` (`SHA256:<base64>`). A pinned fingerprint is always enforced, and a changed key is always rejected. `trust_on_first_use: true` (it requires `known_hosts`) records an unknown key in that file and logs its fingerprint.
+   - Each command's stdout and stderr are read together, capped at `max_output_bytes` (default 1 MiB) in total and limited to `command_timeout` seconds (default 60) overall. Exceeding either limit closes the channel and raises a `DiscoveryError` that names the host and the limit.
+   - A workload whose discovery failed gets the blocker "Dependency discovery failed; dependencies are unverified", so it is not `ready`.
 4. **Right-sizing and cost estimation.** The engine picks the smallest instance type from a static catalog (`config/pricing.yml`) that fits the workload:
    - required vCPU = `cpu × peak_cpu_pct/100 × 1.25`
    - required memory = `memory × peak_mem_pct/100 × 1.25`
@@ -58,7 +61,7 @@ The rebuild keeps the technical concept of the original README and trims it to a
    - calls `create_db_instance` with `StorageEncrypted=True` when a `database` block is present; the master password is read from the environment variable named by `database.password_env`
 
    Every created resource ID is recorded in the state ledger. (Original: "AWS: EC2, S3, RDS, VPC".)
-8. **Data migration with integrity verification.** The engine uploads every file under a workload's `data_path` to `s3://<artifacts_bucket>/<workload>/…`:
+8. **Data migration with integrity verification.** `aws.artifacts_bucket` is required: there is no default bucket name, and the engine stops with a config error (exit 2) when it is empty after `--tfstate` is applied. Before the first upload the engine checks the bucket. `head_bucket` must succeed, or it must answer 404/`NoSuchBucket`, in which case the bucket is created; any other error stops the upload. The bucket's ACL owner (`get_bucket_acl`) must also equal the caller's canonical ID (`list_buckets()['Owner']['ID']`), and this is checked again after a create. A bucket owned by anyone else gets nothing. The engine then uploads every file under a workload's `data_path` to `s3://<artifacts_bucket>/<workload>/…`. A symlink that resolves outside `data_path` stops the upload:
    - it computes an MD5 for each file locally
    - it compares that MD5 with the ETag returned by `put_object` and with the one returned by a later `head_object`
    - it sends `ServerSideEncryption='AES256'`
@@ -196,7 +199,9 @@ workloads:
     utilization: {peak_cpu_pct: 40, peak_mem_pct: 55}
     licensed_software: false
     compliance_requirements: false
-    source: {host: 10.0.0.12, port: 22, username: migrate, key_file: ~/.ssh/id_rsa}
+    source: {host: 10.0.0.12, port: 22, username: migrate, key_file: ~/.ssh/id_rsa,
+             known_hosts: config/known_hosts,           # or host_key_fingerprint: "SHA256:..."
+             trust_on_first_use: false, max_output_bytes: 1048576, command_timeout: 60}
     services: [{name: auth-service, endpoint: "auth.internal:5000"}]
     database: {engine: mysql, host: db.internal, port: 3306, name: portal_db,
                username: portal_user, password_env: PORTAL_DB_PASSWORD, storage: 100}
@@ -270,7 +275,9 @@ assessment.recommend_strategy(workload) -> str
 assessment.risk_score(workload) -> int
 discovery.parse_netstat(text) -> {"listening": [int], "established": [(ip, port)]}
 discovery.parse_ss(text) -> same shape
-discovery.SSHProbe(host, port, username, key_file=None, password=None).collect() -> same shape
+discovery.SSHProbe(host, port, username, key_file=None, password=None, known_hosts=None,
+                   host_key_fingerprint=None, trust_on_first_use=False,
+                   max_output_bytes=1048576, command_timeout=60).collect() -> same shape
 state.MigrationState.load(path); .transition(name, status); .record(workload_name, kind, **ids); .save()
 AWSConnector(aws_cfg, catalog, session=None).provision(workload, state) -> {'security_group_id', 'instance_id', 'volume_id'}
 AWSConnector.create_database(workload, state) -> db_id
@@ -336,10 +343,10 @@ The pins were verified with `tools/check_period.py` over `requirements.txt`, `re
 | Real system | Replacement | Where |
 |---|---|---|
 | AWS EC2 (security groups, instances, tags, EBS) | moto 0.4.14 `moto_server ec2` in container `moto-ec2` | Integration tests and `make demo` |
-| AWS S3 | moto 0.4.14 `moto_server s3bucket_path` (path-style) in container `moto-s3` | Integration tests and `make demo` |
+| AWS S3 | moto 0.4.14 `moto_server s3bucket_path` (path-style) in container `moto-s3`, started through `docker/moto/serve.py`. The wrapper adds `GET /<bucket>?acl`, which returns the bucket owner (by default the ListBuckets owner ID), and `PUT /<bucket>?acl`, which sets that owner so tests can stage a bucket that belongs to another account. moto 0.4.14 implements neither. | Integration tests and `make demo` |
 | AWS RDS | moto 0.4.14 `moto_server rds` in container `moto-rds`. If its responses do not parse with boto3 1.1.4 (see Risks), RDS is covered only by `unittest.mock` fakes of the boto3 client, the integration test is marked `xfail` with the reason, and the e2e and demo configs carry no `database` blocks. Even when it parses, moto ignores `StorageEncrypted`, so encryption is shown only by unit mocks. | Integration tests |
 | AWS credentials and DB passwords | Static fake credentials `AWS_ACCESS_KEY_ID=testing` / `AWS_SECRET_ACCESS_KEY=testing`, plus `PORTAL_DB_PASSWORD=demo` and `REPORTS_DB_PASSWORD=demo` (named by `password_env` in the sample config), in the compose env of `app` | Everywhere |
-| On-prem source host reachable over SSH | `tests/support/fake_ssh.py`: an in-process paramiko `ServerInterface` server on 127.0.0.1 that answers `exec` of `netstat -tan` / `ss -tan` with fixture text | Integration test for discovery |
+| On-prem source host reachable over SSH | `tests/support/fake_ssh.py`: an in-process paramiko `ServerInterface` server on 127.0.0.1 that answers `exec` of `netstat -tan` / `ss -tan` with fixture text. Its RSA host key is generated when the test process starts and written to a per-test known_hosts file, so discovery tests run with host key verification on. Handlers simulate endless, trickling and large-stderr output | Integration test for discovery |
 | Docker daemon and private registry | `tests/support/fake_docker.py`, a recording executable that `docker.command` points at. Unit tests inject a fake `CommandRunner`. | Unit tests, e2e and `make demo` |
 | Migrated application endpoint (validation TCP check) | A `socket` listener started by the test on 127.0.0.1 | Integration tests |
 | Terraform against AWS | Not executed. `terraform graph`, an offline `terraform plan` in a no-network container that is checked only for configuration errors, and pyhcl/raw-text assertions run. | `make tf-check`, part of `make test` |

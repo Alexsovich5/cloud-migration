@@ -1,4 +1,10 @@
-"""Copy workload data files to S3 and prove each one arrived intact."""
+"""Copy workload data files to S3 and prove each one arrived intact.
+
+Bucket names are global, so before anything is uploaded the artifacts bucket
+must be one this account owns: its ACL owner is compared with the canonical
+ID that ListBuckets reports for the caller. Only a "not found" answer from
+HeadBucket leads to CreateBucket; any other error stops the upload.
+"""
 
 import base64
 import hashlib
@@ -7,7 +13,10 @@ import os
 
 from botocore.exceptions import ClientError
 
-DEFAULT_BUCKET = 'migration-artifacts'
+from config import ConfigError
+
+# HeadBucket carries no body, so a missing bucket shows up as the HTTP status.
+NOT_FOUND_CODES = ('404', 'NoSuchBucket', 'NotFound')
 # A single PUT is limited to 5 GiB; multipart uploads are not supported.
 MAX_OBJECT_SIZE = 5 * 1024 ** 3
 
@@ -19,9 +28,21 @@ class IntegrityError(Exception):
     """Raised when an uploaded object does not match its local file."""
 
 
+class BucketAccessError(Exception):
+    """Raised when the artifacts bucket cannot be confirmed as our own."""
+
+
 def artifacts_bucket(aws_cfg):
-    """Return the configured artifacts bucket, or the default name."""
-    return aws_cfg.get('artifacts_bucket') or DEFAULT_BUCKET
+    """Return the configured artifacts bucket; there is no default name."""
+    bucket = aws_cfg.get('artifacts_bucket')
+    if not bucket:
+        raise ConfigError('aws.artifacts_bucket: required (an S3 bucket this account owns; '
+                          '--tfstate fills it from the Terraform output)')
+    return bucket
+
+
+def _error_code(exc):
+    return str(exc.response.get('Error', {}).get('Code', ''))
 
 
 def md5_file(path, chunk=1 << 20):
@@ -40,13 +61,22 @@ def _strip_etag(etag):
 
 
 def _list_files(root):
-    """Return paths relative to ``root`` for every file below it, sorted."""
+    """Return paths relative to ``root`` for every file below it, sorted.
+
+    A symlink that resolves outside ``root`` raises ValueError, so only data
+    that lives under ``data_path`` is uploaded.
+    """
+    real_root = os.path.realpath(root)
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
         for filename in filenames:
             full = os.path.join(dirpath, filename)
-            found.append(os.path.relpath(full, root).replace(os.sep, '/'))
+            rel = os.path.relpath(full, root).replace(os.sep, '/')
+            target = os.path.realpath(full)
+            if not target.startswith(real_root + os.sep):
+                raise ValueError('{0}: {1} resolves outside data_path'.format(root, rel))
+            found.append(rel)
     return sorted(found)
 
 
@@ -58,10 +88,31 @@ class DataMigrator(object):
         self.bucket = bucket
 
     def ensure_bucket(self):
+        """Create the bucket only if it does not exist, then verify we own it."""
         try:
             self.s3.head_bucket(Bucket=self.bucket)
-        except ClientError:
+        except ClientError as exc:
+            code = _error_code(exc)
+            if code not in NOT_FOUND_CODES:
+                raise BucketAccessError('{0}: head_bucket failed ({1}); not creating or '
+                                        'uploading'.format(self.bucket, code))
             self.s3.create_bucket(Bucket=self.bucket)
+        self.verify_owner()
+
+    def verify_owner(self):
+        """Raise BucketAccessError unless the bucket's owner is this account."""
+        try:
+            own = self.s3.list_buckets().get('Owner', {}).get('ID')
+            owner = self.s3.get_bucket_acl(Bucket=self.bucket).get('Owner', {}).get('ID')
+        except ClientError as exc:
+            raise BucketAccessError('{0}: cannot read the bucket owner ({1})'.format(
+                self.bucket, _error_code(exc)))
+        if not own or not owner:
+            raise BucketAccessError('{0}: bucket owner could not be determined'.format(
+                self.bucket))
+        if owner != own:
+            raise BucketAccessError('{0}: owned by {1}, not by this account ({2})'.format(
+                self.bucket, owner, own))
 
     def migrate(self, workload, state, manifest_dir='state'):
         name = workload['name']

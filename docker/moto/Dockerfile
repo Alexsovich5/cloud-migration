@@ -16,4 +16,8 @@ RUN curl -fsSL -o /tmp/moto.tar.gz \
     && pip install --no-cache-dir --no-deps /tmp/moto.tar.gz \
     && rm /tmp/moto.tar.gz
 
-ENTRYPOINT ["moto_server"]
+# serve.py adds bucket ACL owners (GET/PUT /<bucket>?acl), which moto 0.4.14
+# does not implement, then starts moto_server with the same arguments.
+COPY serve.py /opt/moto/serve.py
+
+ENTRYPOINT ["python", "/opt/moto/serve.py"]
