@@ -1,0 +1,83 @@
+# Demo configuration for `make demo`: the sample config pointed at the moto
+# simulators from docker-compose.yml and the recording fake docker command.
+
+pricing_file: config/pricing.yml
+
+aws:
+  region: us-east-1
+  vpc_id: ""                 # filled from Terraform output vpc_id with --tfstate
+  subnet_ids: []             # filled from Terraform output private_subnet_ids
+  security_group_id: ""      # filled from Terraform output app_security_group_id
+  artifacts_bucket: ""       # empty uses the default bucket name
+  allowed_cidr: 10.0.0.0/8
+  default_ami: ami-1a2b3c4d
+  endpoints:
+    ec2: http://moto-ec2:5000
+    s3: http://moto-s3:5001
+    rds: http://moto-rds:5002
+
+docker:
+  registry: registry.local:5000
+  command: tests/support/fake_docker.py
+
+workloads:
+  - name: web-portal
+    type: stateless
+    runtime: python
+    cpu: 2
+    memory: 4
+    storage: 50
+    port: 8080
+    containerizable: true
+    entrypoint: "gunicorn app:app"
+    ports: [80, 443]
+    data_path: tests/fixtures/data/web-portal
+    utilization:
+      peak_cpu_pct: 40
+      peak_mem_pct: 55
+    services:
+      - name: auth-service
+        endpoint: auth.internal:5000
+      - name: cache
+        endpoint: cache.internal:6379
+    database:
+      engine: mysql
+      host: db.internal
+      port: 3306
+      name: portal_db
+      username: portal_user
+      password_env: PORTAL_DB_PASSWORD
+      storage: 100
+    # Post-migration TCP check against the new instance:
+    # validation:
+    #   host: 10.0.1.20
+    #   port: 8080
+    #   timeout: 5
+
+  - name: reporting-engine
+    type: legacy
+    runtime: java
+    cpu: 4
+    memory: 8
+    storage: 200
+    port: 8443
+    containerizable: false
+    ports: [8443]
+    database:
+      engine: postgres
+      host: reports-db.internal
+      port: 5432
+      name: reports
+      username: reports_user
+      password_env: REPORTS_DB_PASSWORD
+      storage: 500
+
+  - name: file-processor
+    type: stateless
+    runtime: python
+    cpu: 2
+    memory: 4
+    storage: 100
+    port: 9000
+    containerizable: true
+    ports: [9000]

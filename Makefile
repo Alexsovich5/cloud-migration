@@ -21,8 +21,14 @@ lint:
 tf-check:
 	cd terraform && terraform graph . > /dev/null
 
+STATE := state/demo-$(shell date +%s).json
+DEMO = $(COMPOSE) run --rm app python src/migration_engine.py --config config/demo.yml --state $(STATE)
+
 demo:
-	@echo "demo is not available yet"
+	$(COMPOSE) up -d moto-ec2 moto-s3 moto-rds
+	$(DEMO) --assess
+	-$(DEMO) --migrate
+	$(DEMO) --report
 
 shell:
 	$(COMPOSE) run --rm app bash

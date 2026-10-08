@@ -95,3 +95,40 @@ def test_rollback_unknown_workload_exits_2(tmpdir, capsys):
 
     assert code == 2
     assert 'no-such-app' in capsys.readouterr()[1]
+
+
+def test_report_and_migrate_are_mutually_exclusive(capsys):
+    with pytest.raises(SystemExit) as exc:
+        migration_engine.main(['--config', VALID, '--report', '--migrate'])
+    assert exc.value.code == 2
+    assert 'not allowed with argument' in capsys.readouterr()[1]
+
+
+def test_report_prints_state_and_assessment(tmpdir, capsys):
+    state_path = str(tmpdir.join('state.json'))
+    output = str(tmpdir.join('results.json'))
+    completed_state(state_path, 'web-portal')
+    assert migration_engine.main(['--config', VALID, '--state', state_path,
+                                  '--output', output, '--assess']) == 0
+    capsys.readouterr()
+
+    code = migration_engine.main(['--config', VALID, '--state', state_path,
+                                  '--output', output, '--report'])
+
+    assert code == 0
+    out = capsys.readouterr()[0]
+    assert 'WORKLOAD' in out
+    assert 'TOTAL 2 workloads (1 assessed, 1 completed)' in out
+
+
+def test_report_json_lists_config_workloads_without_state(tmpdir, capsys):
+    code = migration_engine.main(['--config', VALID, '--state',
+                                  str(tmpdir.join('none.json')),
+                                  '--output', str(tmpdir.join('none-results.json')),
+                                  '--report', '--format', 'json'])
+
+    assert code == 0
+    data = json.loads(capsys.readouterr()[0])
+    names = sorted(w['name'] for w in data['workloads'])
+    assert names == ['reporting-engine', 'web-portal']
+    assert data['totals']['by_status'] == {'pending': 2}

@@ -8,11 +8,13 @@ workload migrations from on-premises infrastructure to AWS.
 
 import logging
 import argparse
+import json
 import os
 import sys
 
 import assessment
 import config
+import report
 import rollback
 import sizing
 import state as state_mod
@@ -196,7 +198,25 @@ def build_parser():
                         help='Execute migration plan')
     action.add_argument('--rollback', metavar='NAME',
                         help='Delete the resources recorded for one workload')
+    action.add_argument('--report', action='store_true',
+                        help='Summarise the state file (and --output, if present)')
+    parser.add_argument('--format', choices=('text', 'json'), default='text',
+                        help='Output format for --report')
     return parser
+
+
+def print_report(args):
+    """Print the progress report for every config and state workload."""
+    cfg = config.load(args.config)
+    st = state_mod.MigrationState.load(args.state)
+    for w in cfg.get('workloads', []):
+        st.workload(w['name'])
+    results = None
+    if os.path.exists(args.output):
+        with open(args.output) as handle:
+            results = json.load(handle)
+    print(report.render(st, results, fmt=args.format))
+    return 0
 
 
 def main(argv=None):
@@ -205,6 +225,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.workload and not args.migrate:
         parser.error('--workload is only valid with --migrate')
+
+    if args.report:
+        try:
+            return print_report(args)
+        except (config.ConfigError, ValueError, IOError) as e:
+            sys.stderr.write('error: {0}\n'.format(e))
+            return 2
 
     try:
         engine = MigrationEngine(args.config, args.state, tfstate_path=args.tfstate)
