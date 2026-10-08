@@ -13,10 +13,35 @@ import subprocess
 logger = logging.getLogger('docker_builder')
 
 
+class CommandRunner:
+    """Runs external commands and captures their output as text."""
+
+    def run(self, argv, timeout=None):
+        """Run argv and return (returncode, stdout, stderr).
+
+        If the command exceeds timeout seconds it is killed and
+        subprocess.TimeoutExpired is raised.
+        """
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
+        return proc.returncode, stdout, stderr
+
+
 class DockerBuilder:
     """Manages Docker containerization for migration workloads."""
 
-    def __init__(self, config):
+    def __init__(self, config, runner=None):
+        self.runner = runner if runner is not None else CommandRunner()
         self.registry = config.get('registry', '')
         self.base_images = config.get('base_images', {
             'python': 'python:3.4-slim',
@@ -32,9 +57,9 @@ class DockerBuilder:
         name = workload['name']
 
         dockerfile_lines = [
-            f"FROM {base}",
-            f"LABEL maintainer=\"migration-framework\"",
-            f"LABEL project=\"{name}\"",
+            "FROM {0}".format(base),
+            "LABEL maintainer=\"migration-framework\"",
+            "LABEL project=\"{0}\"".format(name),
             "",
             "WORKDIR /app",
             ""
@@ -60,14 +85,14 @@ class DockerBuilder:
             "",
             "COPY . .",
             "",
-            f"EXPOSE {workload.get('port', 8080)}",
+            "EXPOSE {0}".format(workload.get('port', 8080)),
             "",
         ])
 
         # Add entrypoint
         entrypoint = workload.get('entrypoint', '')
         if entrypoint:
-            dockerfile_lines.append(f'CMD ["{entrypoint}"]')
+            dockerfile_lines.append('CMD ["{0}"]'.format(entrypoint))
         elif runtime == 'python':
             dockerfile_lines.append('CMD ["python", "app.py"]')
         elif runtime == 'java':
@@ -79,7 +104,7 @@ class DockerBuilder:
         """Build Docker image for a workload."""
         name = workload['name']
         tag = workload.get('version', 'latest')
-        image_name = f"{name}:{tag}"
+        image_name = "{0}:{1}".format(name, tag)
 
         logger.info("Building Docker image: %s", image_name)
 
@@ -100,15 +125,10 @@ class DockerBuilder:
         ]
 
         try:
-            result = subprocess.run(
-                build_cmd,
-                capture_output=True,
-                text=True,
-                timeout=600
-            )
-            if result.returncode != 0:
-                logger.error("Docker build failed: %s", result.stderr)
-                raise Exception(f"Build failed for {image_name}")
+            returncode, _, stderr = self.runner.run(build_cmd, timeout=600)
+            if returncode != 0:
+                logger.error("Docker build failed: %s", stderr)
+                raise Exception("Build failed for {0}".format(image_name))
             logger.info("Successfully built %s", image_name)
             return image_name
         except subprocess.TimeoutExpired:
@@ -119,23 +139,22 @@ class DockerBuilder:
         """Push Docker image to AWS ECR."""
         name = workload['name']
         tag = workload.get('version', 'latest')
-        ecr_uri = f"{self.registry}/{name}:{tag}"
+        ecr_uri = "{0}/{1}:{2}".format(self.registry, name, tag)
 
         logger.info("Pushing image to ECR: %s", ecr_uri)
 
         # Tag for ECR
-        local_image = f"{name}:{tag}"
+        local_image = "{0}:{1}".format(name, tag)
         tag_cmd = ['docker', 'tag', local_image, ecr_uri]
+        push_cmd = ['docker', 'push', ecr_uri]
 
-        try:
-            subprocess.run(tag_cmd, check=True, capture_output=True)
-            push_cmd = ['docker', 'push', ecr_uri]
-            subprocess.run(push_cmd, check=True, capture_output=True)
-            logger.info("Successfully pushed %s", ecr_uri)
-            return ecr_uri
-        except subprocess.CalledProcessError as e:
-            logger.error("Failed to push to ECR: %s", e.stderr)
-            raise
+        for cmd in (tag_cmd, push_cmd):
+            returncode, stdout, stderr = self.runner.run(cmd)
+            if returncode != 0:
+                logger.error("Failed to push to ECR: %s", stderr)
+                raise subprocess.CalledProcessError(returncode, cmd, output=stdout)
+        logger.info("Successfully pushed %s", ecr_uri)
+        return ecr_uri
 
     def analyze_image(self, image_name):
         """Analyze Docker image for security and size optimization."""
@@ -143,10 +162,8 @@ class DockerBuilder:
         inspect_cmd = ['docker', 'inspect', image_name]
 
         try:
-            result = subprocess.run(
-                inspect_cmd, capture_output=True, text=True
-            )
-            info = json.loads(result.stdout)
+            _, stdout, _ = self.runner.run(inspect_cmd)
+            info = json.loads(stdout)
             if info:
                 size_mb = info[0].get('Size', 0) / (1024 * 1024)
                 layers = len(info[0].get('RootFS', {}).get('Layers', []))

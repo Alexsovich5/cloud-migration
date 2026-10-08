@@ -13,7 +13,7 @@ test-unit:
 	py.test -v tests/unit
 
 ci:
-	py.test -v tests
+	flake8 src tests && py.test -v tests
 
 lint:
 	flake8 src tests

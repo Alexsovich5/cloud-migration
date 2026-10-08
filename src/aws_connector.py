@@ -20,7 +20,6 @@ class AWSConnector:
         self.ec2 = boto3.client('ec2', region_name=self.region)
         self.s3 = boto3.client('s3', region_name=self.region)
         self.rds = boto3.client('rds', region_name=self.region)
-        self.iam = boto3.client('iam', region_name=self.region)
         self.vpc_id = config.get('vpc_id', '')
         self.subnet_ids = config.get('subnet_ids', [])
 
@@ -42,6 +41,7 @@ class AWSConnector:
         )
 
         # Create and attach EBS volume if needed
+        volume_id = None
         if workload.get('storage', 0) > 0:
             volume_id = self._create_ebs_volume(
                 size=workload['storage'],
@@ -49,14 +49,18 @@ class AWSConnector:
             )
 
         logger.info("Infrastructure provisioned: instance=%s", instance_id)
-        return instance_id
+        return {
+            'instance_id': instance_id,
+            'volume_id': volume_id,
+            'security_group_id': sg_id
+        }
 
     def _create_security_group(self, workload):
         """Create a security group for the workload."""
         try:
             response = self.ec2.create_security_group(
-                GroupName=f"sg-{workload['name']}",
-                Description=f"Security group for {workload['name']}",
+                GroupName="sg-{0}".format(workload['name']),
+                Description="Security group for {0}".format(workload['name']),
                 VpcId=self.vpc_id
             )
             sg_id = response['GroupId']
@@ -87,17 +91,18 @@ class AWSConnector:
                 MinCount=1,
                 MaxCount=1,
                 SecurityGroupIds=[security_group],
-                SubnetId=self.subnet_ids[0] if self.subnet_ids else '',
-                TagSpecifications=[{
-                    'ResourceType': 'instance',
-                    'Tags': [
-                        {'Key': 'Name', 'Value': name},
-                        {'Key': 'Project', 'Value': 'cloud-migration'},
-                        {'Key': 'ManagedBy', 'Value': 'migration-framework'}
-                    ]
-                }]
+                SubnetId=self.subnet_ids[0] if self.subnet_ids else ''
             )
-            return response['Instances'][0]['InstanceId']
+            instance_id = response['Instances'][0]['InstanceId']
+            self.ec2.create_tags(
+                Resources=[instance_id],
+                Tags=[
+                    {'Key': 'Name', 'Value': name},
+                    {'Key': 'Project', 'Value': 'cloud-migration'},
+                    {'Key': 'ManagedBy', 'Value': 'migration-framework'}
+                ]
+            )
+            return instance_id
         except ClientError as e:
             logger.error("Failed to launch instance: %s", e)
             raise
@@ -140,7 +145,7 @@ class AWSConnector:
 
         try:
             response = self.rds.create_db_instance(
-                DBInstanceIdentifier=f"migrated-{db_config.get('name', 'db')}",
+                DBInstanceIdentifier="migrated-{0}".format(db_config.get('name', 'db')),
                 DBInstanceClass='db.m4.large',
                 Engine=engine,
                 MasterUsername=db_config.get('username', 'admin'),

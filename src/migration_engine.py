@@ -6,7 +6,6 @@ Core migration orchestration module for assessing, planning, and executing
 workload migrations from on-premises infrastructure to AWS.
 """
 
-import os
 import sys
 import json
 import yaml
@@ -71,7 +70,7 @@ class MigrationEngine:
 
             assessment_results.append(result)
             logger.info("Assessed workload: %s (ready=%s)",
-                       workload['name'], result['ready'])
+                        workload['name'], result['ready'])
 
         self._save_assessment(assessment_results)
         return assessment_results
@@ -189,7 +188,7 @@ class MigrationEngine:
                 self._migrate_workload(workload)
             except Exception as e:
                 logger.error("Migration failed for %s: %s",
-                           workload['name'], str(e))
+                             workload['name'], str(e))
                 self._rollback(workload)
 
     def _migrate_workload(self, workload):
@@ -244,11 +243,11 @@ class MigrationEngine:
 def main():
     parser = argparse.ArgumentParser(description='Cloud Migration Framework')
     parser.add_argument('--config', default='config/migration.yml',
-                       help='Path to migration config')
+                        help='Path to migration config')
     parser.add_argument('--assess', action='store_true',
-                       help='Run workload assessment')
+                        help='Run workload assessment')
     parser.add_argument('--migrate', action='store_true',
-                       help='Execute migration plan')
+                        help='Execute migration plan')
     args = parser.parse_args()
 
     engine = MigrationEngine(args.config)
@@ -256,7 +255,7 @@ def main():
     if args.assess:
         results = engine.assess_workloads()
         ready = sum(1 for r in results if r['ready'])
-        print(f"\nAssessment complete: {ready}/{len(results)} workloads ready")
+        print("\nAssessment complete: {0}/{1} workloads ready".format(ready, len(results)))
     elif args.migrate:
         engine.execute_migration()
     else:
