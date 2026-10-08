@@ -1,0 +1,8 @@
+pytest==2.8.0
+py==1.4.30
+ply==3.4
+pyhcl==0.1.11
+flake8==2.4.1
+pep8==1.5.7
+pyflakes==0.8.1
+mccabe==0.3.1

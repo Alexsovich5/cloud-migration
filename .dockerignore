@@ -1,0 +1,5 @@
+.git
+state/
+*.pyc
+assessment_results.json
+.cache/

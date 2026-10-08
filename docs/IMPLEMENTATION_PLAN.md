@@ -42,13 +42,15 @@ This plan implements `docs/SPEC.md` in 17 tasks, T1 to T17. Each task is exactly
 - create `requirements-dev.txt`: pytest==2.8.0, py==1.4.30, ply==3.4, pyhcl==0.1.11 (ply listed before pyhcl, see above), flake8==2.4.1, pep8==1.5.7, pyflakes==0.8.1, mccabe==0.3.1.
 - create `docker-compose.yml` in format `version: "2"`:
   - The `app` service builds from `.` with `platform: linux/amd64` and `entrypoint: []`, mounts `.:/app`, and sets environment `AWS_ACCESS_KEY_ID=testing`, `AWS_SECRET_ACCESS_KEY=testing` and `AWS_DEFAULT_REGION=us-east-1`.
+  - Top-level `name: cloud-migration`; the `app` service image is tagged `cloud-migration:app`.
+  - The default network uses the fixed subnet `172.49.0.0/24`. Any host port published by later tasks comes from the range 20900–20999.
 - create `Makefile` with targets `build test test-unit ci lint tf-check demo shell down`:
   - `test` depends on `build`.
   - `ci` = `py.test -v tests`. The `demo` target is an `echo` placeholder until T16.
 - create `setup.cfg`:
   - `[pytest]` with `testpaths = tests` and `markers = integration`
   - `[flake8]` with `max-line-length = 100` and `exclude = .git,__pycache__`
-- create `.dockerignore` (`.git`, `state/`, `*.pyc`, `assessment_results.json`) and `.gitignore` (`__pycache__/`, `*.pyc`, `state/`, `assessment_results.json`, `.terraform/`, `terraform/*.tfstate*`).
+- create `.dockerignore` (`.git`, `state/`, `*.pyc`, `assessment_results.json`, `.cache/`) and `.gitignore` (`__pycache__/`, `*.pyc`, `state/`, `assessment_results.json`, `.terraform/`, `terraform/*.tfstate*`, `.cache/`). pytest 2.8 writes `.cache/` into the bind-mounted repo.
 - create `tests/__init__.py`, `tests/unit/__init__.py`, `tests/integration/__init__.py` and `tests/conftest.py`. The conftest inserts `src` on `sys.path`.
 - create `tests/unit/test_environment.py`.
 

@@ -1,8 +1,10 @@
-# Cloud Migration Framework
-# Python 3.4 Dependencies - 2015
-
 boto3==1.1.4
-botocore==1.2.0
+botocore==1.2.6
+jmespath==0.8.0
+python-dateutil==2.4.2
+docutils==0.12
+six==1.9.0
 PyYAML==3.11
-requests==2.7.0
 paramiko==1.15.2
+pycrypto==2.6.1
+ecdsa==0.13

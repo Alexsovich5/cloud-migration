@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+state/
+assessment_results.json
+.terraform/
+terraform/*.tfstate*
+.cache/
