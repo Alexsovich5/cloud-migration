@@ -7,9 +7,11 @@ HeadBucket leads to CreateBucket; any other error stops the upload.
 """
 
 import base64
+import errno
 import hashlib
 import json
 import os
+import stat
 
 from botocore.exceptions import ClientError
 
@@ -45,15 +47,44 @@ def _error_code(exc):
     return str(exc.response.get('Error', {}).get('Code', ''))
 
 
-def md5_file(path, chunk=1 << 20):
+def _open_regular(path):
+    """Open ``path`` read-only without following a final symlink.
+
+    Returns ``(file object, size)`` and raises ValueError when the path is a
+    symlink or is not a regular file, so a file swapped for a link after it
+    was listed is never read.
+    """
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ValueError('{0}: is a symbolic link'.format(path))
+        raise
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError('{0}: not a regular file'.format(path))
+        return os.fdopen(fd, 'rb'), info.st_size
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _md5_handle(handle, chunk=1 << 20):
     digest = hashlib.md5()
-    with open(path, 'rb') as handle:
-        while True:
-            block = handle.read(chunk)
-            if not block:
-                break
-            digest.update(block)
+    while True:
+        block = handle.read(chunk)
+        if not block:
+            break
+        digest.update(block)
     return digest.hexdigest()
+
+
+def md5_file(path, chunk=1 << 20):
+    handle, _ = _open_regular(path)
+    with handle:
+        return _md5_handle(handle, chunk)
 
 
 def _strip_etag(etag):
@@ -61,21 +92,25 @@ def _strip_etag(etag):
 
 
 def _list_files(root):
-    """Return paths relative to ``root`` for every file below it, sorted.
+    """Return paths relative to ``root`` for every regular file below it, sorted.
 
-    A symlink that resolves outside ``root`` raises ValueError, so only data
-    that lives under ``data_path`` is uploaded.
+    Symlinks are never followed. One that resolves outside ``root`` raises
+    ValueError, so only data that lives under ``data_path`` is uploaded; one
+    that stays inside is skipped, since its target is listed on its own.
     """
     real_root = os.path.realpath(root)
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
-        for filename in filenames:
+        for filename in filenames + [d for d in dirnames
+                                     if os.path.islink(os.path.join(dirpath, d))]:
             full = os.path.join(dirpath, filename)
             rel = os.path.relpath(full, root).replace(os.sep, '/')
-            target = os.path.realpath(full)
-            if not target.startswith(real_root + os.sep):
-                raise ValueError('{0}: {1} resolves outside data_path'.format(root, rel))
+            if os.path.islink(full):
+                target = os.path.realpath(full)
+                if target != real_root and not target.startswith(real_root + os.sep):
+                    raise ValueError('{0}: {1} resolves outside data_path'.format(root, rel))
+                continue
             found.append(rel)
     return sorted(found)
 
@@ -120,25 +155,27 @@ class DataMigrator(object):
         if data_path and not os.path.isdir(data_path):
             raise ValueError('{0}: data_path {1} is not a directory'.format(name, data_path))
 
-        files = []
-        for rel in (_list_files(data_path) if data_path else []):
-            full = os.path.join(data_path, rel)
-            size = os.path.getsize(full)
+        rels = _list_files(data_path) if data_path else []
+        for rel in rels:
+            size = os.path.getsize(os.path.join(data_path, rel))
             if size > MAX_OBJECT_SIZE:
                 raise ValueError('{0}: {1} is {2} bytes, above the 5 GiB single upload '
                                  'limit'.format(name, rel, size))
-            files.append((rel, full, size))
-
-        if files:
+        if rels:
             self.ensure_bucket()
 
         entries = []
         mismatched = []
-        for rel, full, size in files:
+        for rel in rels:
             key = '{0}/{1}'.format(name, rel)
-            local_md5 = md5_file(full)
-            content_md5 = base64.b64encode(bytes.fromhex(local_md5)).decode('ascii')
-            with open(full, 'rb') as body:
+            body, size = _open_regular(os.path.join(data_path, rel))
+            with body:
+                if size > MAX_OBJECT_SIZE:
+                    raise ValueError('{0}: {1} is {2} bytes, above the 5 GiB single upload '
+                                     'limit'.format(name, rel, size))
+                local_md5 = _md5_handle(body)
+                body.seek(0)
+                content_md5 = base64.b64encode(bytes.fromhex(local_md5)).decode('ascii')
                 response = self.s3.put_object(Bucket=self.bucket, Key=key, Body=body,
                                               ContentMD5=content_md5,
                                               ServerSideEncryption='AES256')
@@ -173,7 +210,11 @@ class DataMigrator(object):
         """Re-check every manifest entry against S3 with ``head_object``."""
         with open(manifest_path) as handle:
             manifest = json.load(handle)
-        bucket = manifest.get('bucket') or self.bucket
+        bucket = manifest.get('bucket')
+        if bucket != self.bucket:
+            raise BucketAccessError('{0}: manifest names bucket {1!r}, not the configured '
+                                    'bucket {2!r}'.format(manifest_path, bucket, self.bucket))
+        self.verify_owner()
         problems = []
         for entry in manifest['files']:
             key = entry['key']

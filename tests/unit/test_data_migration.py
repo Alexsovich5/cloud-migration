@@ -326,6 +326,92 @@ def test_symlink_pointing_outside_data_path_is_rejected(st, tmpdir):
     assert s3.put_calls == []
 
 
+def test_symlink_inside_data_path_is_skipped(st, tmpdir):
+    data = tmpdir.mkdir('data')
+    data.join('real.txt').write('real')
+    os.symlink(str(data.join('real.txt')), str(data.join('alias.txt')))
+    os.symlink(str(data), str(data.join('loop')))
+    s3 = FakeS3()
+
+    manifest_path = data_migration.DataMigrator(s3, 'artifacts').migrate(
+        workload(str(data)), st, manifest_dir=str(tmpdir))
+
+    assert [c['Key'] for c in s3.put_calls] == ['web-portal/real.txt']
+    with open(manifest_path) as handle:
+        assert [f['key'] for f in json.load(handle)['files']] == ['web-portal/real.txt']
+
+
+def test_file_swapped_for_symlink_after_listing_is_not_uploaded(st, tmpdir):
+    data = tmpdir.mkdir('data')
+    victim = data.join('config.txt')
+    victim.write('harmless')
+    secret = tmpdir.join('outside.txt')
+    secret.write('outside secret')
+
+    class SwappingS3(FakeS3):
+        def head_bucket(self, Bucket):
+            os.remove(str(victim))
+            os.symlink(str(secret), str(victim))
+            return FakeS3.head_bucket(self, Bucket)
+
+    s3 = SwappingS3(buckets=['artifacts'])
+
+    with pytest.raises((ValueError, OSError)):
+        data_migration.DataMigrator(s3, 'artifacts').migrate(
+            workload(str(data)), st, manifest_dir=str(tmpdir))
+
+    assert s3.put_calls == []
+    assert not any(b'outside secret' in body for body, _ in s3.objects.values())
+
+
+def test_manifest_md5_and_content_md5_describe_the_uploaded_bytes(st, tmpdir):
+    s3 = FakeS3()
+
+    manifest_path = data_migration.DataMigrator(s3, 'artifacts').migrate(
+        workload(), st, manifest_dir=str(tmpdir))
+
+    with open(manifest_path) as handle:
+        entries = dict((e['key'], e) for e in json.load(handle)['files'])
+    for call in s3.put_calls:
+        digest = hashlib.md5(call['Body'])
+        assert entries[call['Key']]['md5'] == digest.hexdigest()
+        assert call['ContentMD5'] == base64.b64encode(digest.digest()).decode('ascii')
+
+
+def test_verify_refuses_a_bucket_the_manifest_names(st, tmpdir):
+    s3 = FakeS3(buckets=['elsewhere'])
+    s3.objects[('elsewhere', 'web-portal/db/portal_db.sql')] = (b'x', 'y')
+    migrator = data_migration.DataMigrator(s3, 'artifacts')
+    manifest_path = migrator.migrate(workload(), st, manifest_dir=str(tmpdir))
+    with open(manifest_path) as handle:
+        manifest = json.load(handle)
+    manifest['bucket'] = 'elsewhere'
+    with open(manifest_path, 'w') as handle:
+        json.dump(manifest, handle)
+    heads = []
+    s3.head_object = lambda **kw: heads.append(kw)
+
+    with pytest.raises(data_migration.BucketAccessError) as err:
+        migrator.verify(manifest_path)
+
+    assert 'elsewhere' in str(err.value)
+    assert heads == []
+
+
+def test_verify_checks_bucket_owner_before_head_object(st, tmpdir):
+    s3 = FakeS3()
+    migrator = data_migration.DataMigrator(s3, 'artifacts')
+    manifest_path = migrator.migrate(workload(), st, manifest_dir=str(tmpdir))
+    s3.owners['artifacts'] = FOREIGN_ID
+    heads = []
+    s3.head_object = lambda **kw: heads.append(kw)
+
+    with pytest.raises(data_migration.BucketAccessError):
+        migrator.verify(manifest_path)
+
+    assert heads == []
+
+
 def test_delete_objects_removes_each_key():
     s3 = FakeS3()
     s3.objects[('artifacts', 'a')] = (b'1', 'x')
